@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <cuda_runtime.h>
 #include <cooperative_groups.h>
+#include "Message.h"
+
 namespace cg = cooperative_groups;
 
 __device__ uint get_smid(void) {
@@ -13,6 +15,11 @@ __global__ void scheduler(int* sm_ids) {
   if (threadIdx.x == 0) {
     // Store SM ID
     sm_ids[blockIdx.x] = get_smid();
+
+    Message* msg;
+    msg = (Message*)malloc(sizeof(Message));
+    msg->ep = 1;
+    msg->data = msg;
   }
 }
 
