@@ -3,6 +3,7 @@
 
 struct Message {
   int ep;
+  int src_sm;
   void* data;
 };
 

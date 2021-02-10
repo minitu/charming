@@ -1,8 +1,17 @@
 TARGET = nvcharm
 HEADERS = Message.h
+NVCC_LINK = nvcc
+NVCC = nvcc --std=c++11 -dc
 
-$(TARGET): $(TARGET).cu $(HEADERS)
-	nvcc --std=c++11 -o $@ $<
+$(TARGET): user.o $(TARGET).o
+	$(NVCC_LINK) -o $@ $^
 
+$(TARGET).o: $(TARGET).cu $(HEADERS)
+	$(NVCC) -o $@ -c $<
+
+user.o: user.cu
+	$(NVCC) -o $@ -c $<
+
+.PHONY: clean
 clean:
-	rm -f $(TARGET)
+	rm -f $(TARGET) *.o

@@ -1,25 +1,71 @@
 #include <stdio.h>
 #include <cuda_runtime.h>
-#include <cooperative_groups.h>
+#include <nvfunctional>
 #include "Message.h"
+#include "user.h"
 
-namespace cg = cooperative_groups;
+#define EM_CNT_MAX 1024 // Maximum number of entry methods
+#define SM_CNT 80
 
-__device__ uint get_smid(void) {
+__device__ int entry_methods[EM_CNT_MAX];
+__device__ Message* message_queue[SM_CNT]; // FIXME: Hard-coded # of SMs
+__device__ int terminate[SM_CNT];
+
+__device__ uint get_smid() {
   uint ret;
   asm("mov.u32 %0, %smid;" : "=r"(ret) );
   return ret;
 }
 
+__device__ bool check_terminate() {
+  for (int i = 0; i < SM_CNT; i++) {
+    if (terminate[i] == 0) {
+      // TODO: Why infinite loop without this print?
+      printf("SM %d not terminated\n", i);
+      return false;
+    }
+  }
+  return true;
+}
+
+__device__ void send(int sm, Message* msg) {
+  message_queue[sm] = msg;
+}
+
+__device__ void recv(int my_sm) {
+  Message* msg = message_queue[my_sm];
+  if (msg) {
+    // TODO: Handle received message
+    printf("SM %d received message from SM %d\n", my_sm, msg->src_sm);
+    msg = nullptr;
+
+    // TODO: Terminate only when a termination message is received
+    terminate[my_sm] = 1;
+  }
+}
+
 __global__ void scheduler(int* sm_ids) {
+  const int my_sm = get_smid();
+  register_entry_methods(entry_methods);
+
   if (threadIdx.x == 0) {
     // Store SM ID
-    sm_ids[blockIdx.x] = get_smid();
+    sm_ids[blockIdx.x] = my_sm;
 
+    int peer_sm = (my_sm+1) % SM_CNT;
+
+    // Send a message to the peer SM
     Message* msg;
     msg = (Message*)malloc(sizeof(Message));
     msg->ep = 1;
-    msg->data = msg;
+    msg->src_sm = my_sm;
+    msg->data = nullptr;
+    send(peer_sm, msg);
+
+    // Faux scheduler loop
+    do {
+      recv(my_sm);
+    } while (message_queue != nullptr && !check_terminate());
   }
 }
 
