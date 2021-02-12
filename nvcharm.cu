@@ -3,12 +3,19 @@
 #include <nvfunctional>
 #include "Message.h"
 #include "user.h"
+#include "nvcharm.h"
 
+#define DEBUG 1
+
+// FIXME: Hard-coded limits
 #define EM_CNT_MAX 1024 // Maximum number of entry methods
-#define SM_CNT 80
+#define SM_CNT 80 // Number of SMs
+#define MSG_CNT_MAX 1024 // Maximum number of messages in message queue
+#define MSG_IDX(sm,idx) (MSG_CNT_MAX*(sm) + (idx))
 
 __device__ int entry_methods[EM_CNT_MAX];
-__device__ Message* message_queue[SM_CNT]; // FIXME: Hard-coded # of SMs
+__device__ Message* msg_queue[SM_CNT * MSG_CNT_MAX];
+__device__ int msg_cnt[SM_CNT];
 __device__ int terminate[SM_CNT];
 
 __device__ uint get_smid() {
@@ -17,55 +24,75 @@ __device__ uint get_smid() {
   return ret;
 }
 
-__device__ bool check_terminate() {
-  for (int i = 0; i < SM_CNT; i++) {
-    if (terminate[i] == 0) {
-      // TODO: Why infinite loop without this print?
-      printf("SM %d not terminated\n", i);
-      return false;
-    }
-  }
-  return true;
+using clock_value_t = long long;
+
+__device__ void sleep(clock_value_t sleep_cycles) {
+  clock_value_t start = clock64();
+  clock_value_t cycles_elapsed;
+  do {
+    cycles_elapsed = clock64() - start;
+  } while (cycles_elapsed < sleep_cycles);
 }
 
 __device__ void send(int sm, Message* msg) {
-  message_queue[sm] = msg;
+  int msg_idx = atomicAdd(&msg_cnt[sm], 1);
+  msg_queue[MSG_IDX(sm,msg_idx)] = msg;
+#if DEBUG
+  printf("Stored message in idx %d, msg %p\n", MSG_IDX(sm,msg_idx), msg);
+#endif
 }
 
-__device__ void recv(int my_sm) {
-  Message* msg = message_queue[my_sm];
+__device__ void recv(int my_sm, int& processed, bool& terminate) {
+  // TODO: Recv doesn't happen without follownig print statement, why?
+#if DEBUG
+  printf("SM %d checking idx %d\n", my_sm, MSG_IDX(my_sm, processed));
+#endif
+  Message*& msg = msg_queue[MSG_IDX(my_sm, processed)];
   if (msg) {
-    // TODO: Handle received message
-    printf("SM %d received message from SM %d\n", my_sm, msg->src_sm);
-    msg = nullptr;
+#if DEBUG
+    printf("SM %d received message %p, SM %d, ep %d\n",
+        my_sm, msg, msg->src_sm, msg->ep);
+#endif
 
-    // TODO: Terminate only when a termination message is received
-    terminate[my_sm] = 1;
+    if (msg->ep == -1) {
+      terminate = true;
+#if DEBUG
+      printf("SM %d terminating\n", my_sm);
+#endif
+    }
+
+    // TODO: Handle received message
+
+    msg = nullptr;
+    processed++;
   }
 }
 
-__global__ void scheduler(int* sm_ids) {
-  const int my_sm = get_smid();
+__global__ void scheduler(DeviceCtx* ctx) {
+  //const int my_sm = get_smid();
+  const int my_sm = blockIdx.x;
+  __shared__ int processed;
+  __shared__ bool terminate;
+
   register_entry_methods(entry_methods);
 
+  // Leader thread in each thread block runs the scheduler loop
   if (threadIdx.x == 0) {
-    // Store SM ID
-    sm_ids[blockIdx.x] = my_sm;
+    processed = 0;
+    terminate = false;
 
-    int peer_sm = (my_sm+1) % SM_CNT;
+    if (blockIdx.x == 0) {
+      printf("SMs: %d\n", ctx->n_sms);
 
-    // Send a message to the peer SM
-    Message* msg;
-    msg = (Message*)malloc(sizeof(Message));
-    msg->ep = 1;
-    msg->src_sm = my_sm;
-    msg->data = nullptr;
-    send(peer_sm, msg);
+      // Execute user's main function
+      charm_main();
+    }
 
-    // Faux scheduler loop
+    // Scheduler loop
     do {
-      recv(my_sm);
-    } while (message_queue != nullptr && !check_terminate());
+      recv(my_sm, processed, terminate);
+      //sleep(1);
+    } while (!terminate);
   }
 }
 
@@ -88,29 +115,50 @@ int main(int argc, char* argv[]) {
     exit(1);
   }
 
+  // Create device context
+  DeviceCtx* ctx;
+  cudaMallocManaged(&ctx, sizeof(DeviceCtx));
+  ctx->n_sms = prop.multiProcessorCount;
+
   // Obtain kernel block and grid sizes
   int block_size = 1;
-  int grid_size = prop.multiProcessorCount;
+  //int grid_size = prop.multiProcessorCount;
+  int grid_size = 10;
   if (argc > 1) block_size = atoi(argv[1]);
   if (argc > 2) grid_size = atoi(argv[2]);
   printf("* Test properties\n"
       "Block size: %d\nGrid size: %d\n\n", block_size, grid_size);
 
-  // Allocate memory for SM IDs
-  int* sm_ids;
-  cudaMallocManaged(&sm_ids, grid_size * sizeof(int));
-
   // Run kernel
-  scheduler<<<grid_size, block_size>>>(sm_ids);
+  scheduler<<<grid_size, block_size>>>(ctx);
   cudaDeviceSynchronize();
 
-  // Print block to SM mappings
-  for (int i = 0; i < grid_size; i++) {
-    printf("Block %d -> SM %d\n", i, sm_ids[i]);
-  }
-  printf("\n");
-
-  cudaFree(sm_ids);
-
   return 0;
+}
+
+/******************** Chare ********************/
+__device__ void Chare::create(int n_chares) {
+  proxy.n_chares = n_chares;
+  proxy.mapping = (int*)malloc(sizeof(int) * n_chares);
+  for (int i = 0; i < proxy.n_chares; i++) {
+    proxy.mapping[i] = i % SM_CNT; // FIXME
+  }
+}
+
+__device__ void Chare::invoke(int ep, int idx) {
+  if (idx == -1) {
+    // Broadcast to all chares
+    for (int i = 0; i < proxy.n_chares; i++) {
+      Message* msg = (Message*)malloc(sizeof(Message));
+      msg->ep = ep;
+      int target_sm = proxy.mapping[i];
+      send(target_sm, msg);
+    }
+  } else {
+    // P2P
+    Message* msg = (Message*)malloc(sizeof(Message));
+    msg->ep = ep;
+    int target_sm = proxy.mapping[idx];
+    send(target_sm, msg);
+  }
 }
