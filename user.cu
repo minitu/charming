@@ -1,29 +1,33 @@
 #include <stdio.h>
 #include "user.h"
 
+// Entry method with index 0
 __device__ void hello() {
   printf("Hello!\n");
 }
 
-__device__ int fibonacci(int n) {
-  if (n == 1) return 0;
-  else if (n == 2) return 1;
-  else return fibonacci(n-2) + fibonacci(n-1);
-}
-
-__device__ void register_entry_methods(int* entry_methods) {
-  // TODO
-}
-
-__device__ void charm_main() {
-  Foo a;
-  a.create(10);
-  a.invoke(1,-1);
-  a.invoke(2,3);
-  a.invoke(3,5);
-  a.invoke(-1,-1);
+// Entry method with index 1
+__device__ void morning() {
+  printf("Good morning!\n");
 }
 
 __device__ void Foo::hello() {
   printf("Hello!\n");
+}
+
+__device__ void Foo::morning() {
+  printf("Good morning!\n");
+}
+
+__device__ void register_entry_methods(EntryMethod** entry_methods) {
+  entry_methods[0] = new EntryMethodImpl<void()>(hello);
+  entry_methods[1] = new EntryMethodImpl<void()>(morning);
+}
+
+__device__ void charm_main() {
+  Foo a(9);
+  a.create(10);
+  a.invoke(0,-1);
+  a.invoke(1,3);
+  a.invoke(-1,-1);
 }

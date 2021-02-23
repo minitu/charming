@@ -4,15 +4,14 @@
 #include "nvcharm.h"
 
 __device__ void hello();
-__device__ int fibonacci(int n);
-__device__ void register_entry_methods(int* entry_methods);
-__device__ void charm_main();
+__device__ void morning();
 
 struct Foo : Chare {
   int a;
-  int b;
 
+  __device__ Foo(int a_) : a(a_) {}
   __device__ void hello();
+  __device__ void morning();
 };
 
 #endif

@@ -1,6 +1,5 @@
 #include <stdio.h>
 #include <cuda_runtime.h>
-#include <nvfunctional>
 #include "Message.h"
 #include "user.h"
 #include "nvcharm.h"
@@ -13,7 +12,7 @@
 #define MSG_CNT_MAX 1024 // Maximum number of messages in message queue
 #define MSG_IDX(sm,idx) (MSG_CNT_MAX*(sm) + (idx))
 
-__device__ int entry_methods[EM_CNT_MAX];
+__device__ EntryMethod* entry_methods[EM_CNT_MAX];
 __device__ Message* msg_queue[SM_CNT * MSG_CNT_MAX];
 __device__ int msg_cnt[SM_CNT];
 __device__ int terminate[SM_CNT];
@@ -61,7 +60,8 @@ __device__ void recv(int my_sm, int& processed, bool& terminate) {
 #endif
     }
 
-    // TODO: Handle received message
+    // Handle received message
+    entry_methods[msg->ep]->call();
 
     msg = nullptr;
     processed++;
