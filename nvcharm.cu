@@ -12,6 +12,8 @@
 #define MSG_CNT_MAX 1024 // Maximum number of messages in message queue
 #define MSG_IDX(sm,idx) (MSG_CNT_MAX*(sm) + (idx))
 
+__device__ int chare_type_cnt = 0;
+__device__ ChareType* chare_types[1024];
 __device__ EntryMethod* entry_methods[EM_CNT_MAX];
 __device__ Message* msg_queue[SM_CNT * MSG_CNT_MAX];
 __device__ int msg_cnt[SM_CNT];
@@ -137,28 +139,41 @@ int main(int argc, char* argv[]) {
 }
 
 /******************** Chare ********************/
-__device__ void Chare::create(int n_chares) {
-  proxy.n_chares = n_chares;
-  proxy.mapping = (int*)malloc(sizeof(int) * n_chares);
-  for (int i = 0; i < proxy.n_chares; i++) {
-    proxy.mapping[i] = i % SM_CNT; // FIXME
+
+template <typename T>
+__device__ Chare<T>::Chare(T obj_, int n_chares_) : obj(obj_), n_chares(n_chares_) {
+  // Create chare objects on all GPUs
+  // TODO: Assume 1 GPU for now
+  local = new T[n_chares];
+  for (int i = 0; i < n_chares; i++) {
+    local[i] = obj;
+  }
+  type = chare_type_cnt++;
+  chare_types[type] = this;
+
+  mapping = new int[n_chares];
+  for (int i = 0; i < n_chares; i++) {
+    mapping[i] = i % SM_CNT; // FIXME
   }
 }
 
-__device__ void Chare::invoke(int ep, int idx) {
+template <typename T>
+__device__ void Chare<T>::invoke(int ep, int idx) {
   if (idx == -1) {
     // Broadcast to all chares
-    for (int i = 0; i < proxy.n_chares; i++) {
+    for (int i = 0; i < n_chares; i++) {
       Message* msg = (Message*)malloc(sizeof(Message));
+      msg->chare_type = type;
       msg->ep = ep;
-      int target_sm = proxy.mapping[i];
+      int target_sm = mapping[i];
       send(target_sm, msg);
     }
   } else {
     // P2P
     Message* msg = (Message*)malloc(sizeof(Message));
+    msg->chare_type = type;
     msg->ep = ep;
-    int target_sm = proxy.mapping[idx];
+    int target_sm = mapping[idx];
     send(target_sm, msg);
   }
 }
