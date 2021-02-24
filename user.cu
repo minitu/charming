@@ -25,8 +25,7 @@ __device__ void register_entry_methods(EntryMethod** entry_methods) {
 }
 
 __device__ void charm_main() {
-  Foo a(9);
-  a.create(10);
+  Foo a(9, 10);
   a.invoke(0,-1);
   a.invoke(1,3);
   a.invoke(-1,-1);

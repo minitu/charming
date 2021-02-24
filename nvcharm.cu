@@ -137,28 +137,28 @@ int main(int argc, char* argv[]) {
 }
 
 /******************** Chare ********************/
-__device__ void Chare::create(int n_chares) {
-  proxy.n_chares = n_chares;
-  proxy.mapping = (int*)malloc(sizeof(int) * n_chares);
-  for (int i = 0; i < proxy.n_chares; i++) {
-    proxy.mapping[i] = i % SM_CNT; // FIXME
+__device__ ChareArray::ChareArray(int n_chares_) {
+  n_chares = n_chares_;
+  mapping = (int*)malloc(sizeof(int) * n_chares);
+  for (int i = 0; i < n_chares; i++) {
+    mapping[i] = i % SM_CNT; // FIXME
   }
 }
 
-__device__ void Chare::invoke(int ep, int idx) {
+__device__ void ChareArray::invoke(int ep, int idx) {
   if (idx == -1) {
     // Broadcast to all chares
-    for (int i = 0; i < proxy.n_chares; i++) {
+    for (int i = 0; i < n_chares; i++) {
       Message* msg = (Message*)malloc(sizeof(Message));
       msg->ep = ep;
-      int target_sm = proxy.mapping[i];
+      int target_sm = mapping[i];
       send(target_sm, msg);
     }
   } else {
     // P2P
     Message* msg = (Message*)malloc(sizeof(Message));
     msg->ep = ep;
-    int target_sm = proxy.mapping[idx];
+    int target_sm = mapping[idx];
     send(target_sm, msg);
   }
 }

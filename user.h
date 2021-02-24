@@ -6,10 +6,10 @@
 __device__ void hello();
 __device__ void morning();
 
-struct Foo : Chare {
+struct Foo : ChareArray {
   int a;
 
-  __device__ Foo(int a_) : a(a_) {}
+  __device__ Foo(int a_, int n_chares) : a(a_), ChareArray(n_chares) {}
   __device__ void hello();
   __device__ void morning();
 };

@@ -7,17 +7,11 @@ struct DeviceCtx {
   int n_sms;
 };
 
-struct Proxy {
+struct ChareArray {
   int n_chares;
   int *mapping; // Chare -> SM mapping
 
-  __device__ Proxy() : n_chares(-1), mapping(nullptr) {}
-};
-
-struct Chare {
-  Proxy proxy;
-
-  __device__ void create(int n_chares);
+  __device__ ChareArray(int n_chares_);
   __device__ void invoke(int ep, int idx);
 };
 
