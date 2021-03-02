@@ -46,4 +46,12 @@ struct EntryMethodImpl : EntryMethod {
 //__device__ void register_entry_methods(EntryMethod** entry_methods);
 __device__ void charm_main();
 
+#define cuda_check_error() { \
+  cudaError_t e = cudaGetLastError(); \
+  if (cudaSuccess != e) { \
+    printf("CUDA failure %s:%d: '%s'\n", __FILE__, __LINE__, cudaGetErrorString(e)); \
+    exit(-1); \
+  } \
+}
+
 #endif

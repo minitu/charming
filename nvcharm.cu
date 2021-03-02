@@ -108,21 +108,25 @@ __global__ void simple_shift(int *destination) {
   int mype = nvshmem_my_pe();
   int npes = nvshmem_n_pes();
   int peer = (mype + 1) % npes;
-  printf("nvshmem pes: %d\n", npes);
 
-  nvshmem_int_p(destination, mype, peer);
-  //nvshmem_barrier_all();
+  if (!blockIdx.x && !threadIdx.x) {
+    nvshmem_int_p(destination, mype, peer);
+    nvshmem_barrier_all();
+  }
 }
 
 int main(int argc, char* argv[]) {
   int rank, msg;
   cudaStream_t stream;
 
+  // Initialize MPI
+  MPI_Init(&argc, &argv);
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+
+  // Initialize NVSHMEM
   nvshmemx_init_attr_t attr;
   MPI_Comm comm = MPI_COMM_WORLD;
   attr.mpi_comm = &comm;
-  MPI_Init(&argc, &argv);
-  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   nvshmemx_init_attr(NVSHMEMX_INIT_WITH_MPI_COMM, &attr);
 
   /*
@@ -145,22 +149,29 @@ int main(int argc, char* argv[]) {
   }
   */
 
-  cudaStreamCreate(&stream);
+  cudaSetDevice(0);
+  cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
 
   int *destination = (int *) nvshmem_malloc(sizeof(int));
-
-  void* args[1] = {&destination};
-  nvshmemx_collective_launch((const void*)simple_shift, 1, 1, args, 0, stream);
-  //simple_shift<<<1, 1, 0, stream>>>(destination);
-  //nvshmemx_barrier_all_on_stream(stream);
   nvshmem_barrier_all();
-  cudaMemcpyAsync(&msg, destination, sizeof(int), cudaMemcpyDeviceToHost, stream);
 
+  void* args[1] = { &destination };
+  nvshmemx_collective_launch((const void*)simple_shift, 1, 1, args, 0, stream);
+  //simple_shift<<<1, 1, 0, stream>>>(destination); // This also seems to work
+  cuda_check_error();
   cudaStreamSynchronize(stream);
+  //nvshmemx_barrier_all_on_stream(stream); // Hangs
+  nvshmem_barrier_all();
+
+  cudaMemcpyAsync(&msg, destination, sizeof(int), cudaMemcpyDeviceToHost, stream);
+  cudaStreamSynchronize(stream);
+
   printf("%d: received message %d\n", nvshmem_my_pe(), msg);
 
+  // Finalize NVSHMEM and MPI
   nvshmem_free(destination);
   nvshmem_finalize();
+  cudaStreamDestroy(stream);
   MPI_Finalize();
 
   /*
