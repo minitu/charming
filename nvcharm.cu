@@ -9,6 +9,39 @@
 
 #define DEBUG 0
 
+#define MSG_CNT_MAX 1e6 // Maximum number of messages per PE
+#define EM_CNT_MAX 1024 // Maximum number of entry methods
+
+__device__ Message* msg_queue_symbol;
+__device__ int* msg_queue_head_symbol;
+__device__ int* msg_queue_tail_symbol;
+__device__ EntryMethod* entry_methods[EM_CNT_MAX];
+
+__device__ inline void send(int dst_pe, Message* msg) {
+  /*
+  int msg_idx = atomicAdd(&msg_cnt[sm], 1);
+  msg_queue[MSG_IDX(sm,msg_idx)] = msg;
+  */
+}
+
+__device__ inline void recv(int my_pe, bool& terminate) {
+  /*
+  int* head_ptr = nvshmem_ptr(msg_queue_tail_symbol, my_pe);
+  if (msg) {
+
+    if (msg->ep == -1) {
+      terminate = true;
+    }
+
+    // Handle received message
+    entry_methods[msg->ep]->call();
+
+    msg = nullptr;
+    processed++;
+  }
+  */
+}
+
 /*
 // FIXME: Hard-coded limits
 #define EM_CNT_MAX 1024 // Maximum number of entry methods
@@ -104,6 +137,7 @@ __global__ void scheduler(DeviceCtx* ctx) {
 }
 */
 
+/*
 __global__ void simple_shift(int *destination) {
   int mype = nvshmem_my_pe();
   int npes = nvshmem_n_pes();
@@ -112,6 +146,26 @@ __global__ void simple_shift(int *destination) {
   if (!blockIdx.x && !threadIdx.x) {
     nvshmem_int_p(destination, mype, peer);
     nvshmem_barrier_all();
+  }
+}
+*/
+
+__global__ void scheduler(Message* msg_queue, int* msg_queue_head, int* msg_queue_tail) {
+  if (!blockIdx.x && !threadIdx.x) {
+    int my_pe = nvshmem_my_pe();
+    int n_pes = nvshmem_n_pes();
+    bool terminate = false;
+
+    // Register user's entry methods
+    register_entry_methods(entry_methods);
+
+    // Execute user's main function
+    charm_main();
+
+    // Scheduler loop
+    do {
+      recv(my_pe, terminate);
+    } while (!terminate);
   }
 }
 
@@ -129,80 +183,46 @@ int main(int argc, char* argv[]) {
   attr.mpi_comm = &comm;
   nvshmemx_init_attr(NVSHMEMX_INIT_WITH_MPI_COMM, &attr);
 
-  /*
-  // Print GPU device properties
-  int device = 0;
-  cudaSetDevice(device);
-  cudaDeviceProp prop;
-  cudaGetDeviceProperties(&prop, device);
-  printf("* GPU properties\n"
-      "Name: %s\nCompute capability: %d.%d\nSMs: %d\n"
-      "Max threads per SM: %d\nKernel runtime limit: %d\n"
-      "Managed memory support: %d\nCooperative kernel support: %d\n\n",
-      prop.name, prop.major, prop.minor, prop.multiProcessorCount,
-      prop.maxThreadsPerMultiProcessor, prop.kernelExecTimeoutEnabled,
-      prop.managedMemory, prop.cooperativeLaunch);
-
-  if (!prop.managedMemory) {
-    fprintf(stderr, "Managed memory support required\n");
-    exit(1);
-  }
-  */
-
+  // Initialize CUDA
   cudaSetDevice(0);
   cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
 
-  int *destination = (int *) nvshmem_malloc(sizeof(int));
+  // NVSHMEM symmetric memory allocations
+  Message* msg_queue = (Message*) nvshmem_malloc(sizeof(Message) * MSG_CNT_MAX);
+  int* msg_queue_head = (int*) nvshmem_malloc(sizeof(int));
+  int* msg_queue_tail = (int*) nvshmem_malloc(sizeof(int));
   nvshmem_barrier_all();
+  cudaMemcpyToSymbol(msg_queue_symbol, msg_queue, sizeof(Message*));
+  cudaMemcpyToSymbol(msg_queue_head_symbol, msg_queue_head, sizeof(int*));
+  cudaMemcpyToSymbol(msg_queue_tail_symbol, msg_queue_tail, sizeof(int*));
 
-  void* args[1] = { &destination };
-  nvshmemx_collective_launch((const void*)simple_shift, 1, 1, args, 0, stream);
-  //simple_shift<<<1, 1, 0, stream>>>(destination); // This also seems to work
+  // Launch scheduler
+  int grid_size = (argc > 1) ? atoi(argv[1]) : 1;
+  int block_size = (argc > 2) ? atoi(argv[2]) : 1;
+  if (!rank) {
+    printf("NVCHARM\nGrid size: %d\nBlock size: %d\n", grid_size, block_size);
+  }
+  void* scheduler_args[3] = { &msg_queue, &msg_queue_head, &msg_queue_tail };
+  nvshmemx_collective_launch((const void*)scheduler, grid_size, block_size,
+      scheduler_args, 0, stream);
   cuda_check_error();
   cudaStreamSynchronize(stream);
   //nvshmemx_barrier_all_on_stream(stream); // Hangs
   nvshmem_barrier_all();
 
-  cudaMemcpyAsync(&msg, destination, sizeof(int), cudaMemcpyDeviceToHost, stream);
-  cudaStreamSynchronize(stream);
-
-  printf("%d: received message %d\n", nvshmem_my_pe(), msg);
-
   // Finalize NVSHMEM and MPI
-  nvshmem_free(destination);
+  nvshmem_free(msg_queue);
   nvshmem_finalize();
   cudaStreamDestroy(stream);
   MPI_Finalize();
 
-  /*
-  // Create device context
-  DeviceCtx* ctx;
-  cudaMallocManaged(&ctx, sizeof(DeviceCtx));
-  ctx->n_sms = prop.multiProcessorCount;
-
-  // Obtain kernel block and grid sizes
-  int block_size = 1;
-  int grid_size = ctx->n_sms;
-  if (argc > 1) block_size = atoi(argv[1]);
-  if (argc > 2) grid_size = atoi(argv[2]);
-  printf("* Test properties\n"
-      "Block size: %d\nGrid size: %d\n\n", block_size, grid_size);
-
-  // Run kernel
-  scheduler<<<grid_size, block_size>>>(ctx);
-  cudaDeviceSynchronize();
-  */
-
   return 0;
 }
 
-/******************** Chare ********************/
-
-/*
 template <typename T>
 __device__ Chare<T>::Chare(T obj_, int n_chares_) : obj(obj_), n_chares(n_chares_) {
-  // Create chare objects on all GPUs
-  // TODO: Assume 1 GPU for now
+  /*
+  // TODO: Create chare objects on all GPUs
   mapping = new Mapping[SM_CNT];
   int rem = n_chares % SM_CNT;
   int start_idx = 0;
@@ -214,12 +234,14 @@ __device__ Chare<T>::Chare(T obj_, int n_chares_) : obj(obj_), n_chares(n_chares
     mapping[i].end_idx = start_idx + n_chares_sm - 1;
     start_idx += n_chares_sm;
 
-    CreationMessage<T>* create_msg = new CreationMessage<T>(obj);
+    //CreationMessage<T>* create_msg = new CreationMessage<T>(obj);
   }
+  */
 }
 
 template <typename T>
 __device__ void Chare<T>::invoke(int ep, int idx) {
+  /*
   if (idx == -1) {
     // Broadcast to all chares
     for (int i = 0; i < n_chares; i++) {
@@ -235,5 +257,5 @@ __device__ void Chare<T>::invoke(int ep, int idx) {
     int target_sm = mapping[idx];
     send(target_sm, msg);
   }
+  */
 }
-*/

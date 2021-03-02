@@ -3,10 +3,14 @@
 
 #include <nvfunctional>
 
-/*
-struct DeviceCtx {
-  int n_sms;
-};
+#define cuda_check_error() {                                                         \
+  cudaError_t e = cudaGetLastError();                                                \
+  if (cudaSuccess != e) {                                                            \
+    printf("CUDA failure %s:%d: '%s'\n", __FILE__, __LINE__, cudaGetErrorString(e)); \
+    exit(-1);                                                                        \
+  }                                                                                  \
+}
+
 
 struct ChareType {
   int type_id;
@@ -25,7 +29,7 @@ struct Chare : ChareType {
   Mapping* mapping;
 
   __device__ Chare(T obj_, int n_chares_);
-  //__device__ void invoke(int ep, int idx);
+  __device__ void invoke(int ep, int idx);
 };
 
 struct EntryMethod {
@@ -40,18 +44,9 @@ struct EntryMethodImpl : EntryMethod {
   __device__ EntryMethodImpl(nvstd::function<T> fn_) : fn(fn_) {}
   __device__ virtual void call() const { fn(); }
 };
-*/
 
 // User functions required by the runtime
-//__device__ void register_entry_methods(EntryMethod** entry_methods);
+__device__ void register_entry_methods(EntryMethod** entry_methods);
 __device__ void charm_main();
-
-#define cuda_check_error() { \
-  cudaError_t e = cudaGetLastError(); \
-  if (cudaSuccess != e) { \
-    printf("CUDA failure %s:%d: '%s'\n", __FILE__, __LINE__, cudaGetErrorString(e)); \
-    exit(-1); \
-  } \
-}
 
 #endif

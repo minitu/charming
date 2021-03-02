@@ -19,4 +19,10 @@ struct CreationMessage {
 };
 */
 
+struct Message {
+  int ep;
+  int src_pe;
+  void* data;
+};
+
 #endif // MESSAGE_H_
