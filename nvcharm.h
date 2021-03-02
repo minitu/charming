@@ -3,24 +3,29 @@
 
 #include <nvfunctional>
 
+/*
 struct DeviceCtx {
   int n_sms;
 };
 
 struct ChareType {
-  int type;
+  int type_id;
+};
+
+struct Mapping {
+  int sm_id;
+  int start_idx;
+  int end_idx;
 };
 
 template <typename T>
 struct Chare : ChareType {
   T obj;
-  T* local;
-  int id;
   int n_chares;
-  int *mapping; // Chare -> SM mapping
+  Mapping* mapping;
 
   __device__ Chare(T obj_, int n_chares_);
-  __device__ void invoke(int ep, int idx);
+  //__device__ void invoke(int ep, int idx);
 };
 
 struct EntryMethod {
@@ -35,9 +40,10 @@ struct EntryMethodImpl : EntryMethod {
   __device__ EntryMethodImpl(nvstd::function<T> fn_) : fn(fn_) {}
   __device__ virtual void call() const { fn(); }
 };
+*/
 
 // User functions required by the runtime
-__device__ void register_entry_methods(EntryMethod** entry_methods);
+//__device__ void register_entry_methods(EntryMethod** entry_methods);
 __device__ void charm_main();
 
 #endif

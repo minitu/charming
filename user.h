@@ -3,8 +3,10 @@
 
 #include "nvcharm.h"
 
+/*
 __device__ void hello();
 __device__ void morning();
+*/
 
 struct Foo {
   int a;
@@ -15,6 +17,6 @@ struct Foo {
   __device__ void morning();
 };
 
-template struct Chare<Foo>;
+//template struct Chare<Foo>;
 
 #endif
