@@ -6,15 +6,13 @@
 #include "Message.h"
 #include "user.h"
 #include "nvcharm.h"
+#include "ringbuf.h"
 
 #define DEBUG 0
 
 #define MSG_CNT_MAX 1e6 // Maximum number of messages per PE
 #define EM_CNT_MAX 1024 // Maximum number of entry methods
 
-__device__ Message* msg_queue_symbol;
-__device__ int* msg_queue_head_symbol;
-__device__ int* msg_queue_tail_symbol;
 __device__ EntryMethod* entry_methods[EM_CNT_MAX];
 
 __device__ inline void send(int dst_pe, Message* msg) {
@@ -150,7 +148,7 @@ __global__ void simple_shift(int *destination) {
 }
 */
 
-__global__ void scheduler(Message* msg_queue, int* msg_queue_head, int* msg_queue_tail) {
+__global__ void scheduler(ringbuf_t* rbuf, size_t rbuf_size) {
   if (!blockIdx.x && !threadIdx.x) {
     int my_pe = nvshmem_my_pe();
     int n_pes = nvshmem_n_pes();
@@ -162,10 +160,15 @@ __global__ void scheduler(Message* msg_queue, int* msg_queue_head, int* msg_queu
     // Execute user's main function
     charm_main();
 
+    // Initialize message queue
+    ringbuf_init(rbuf, rbuf_size);
+
     // Scheduler loop
+    /*
     do {
       recv(my_pe, terminate);
     } while (!terminate);
+    */
   }
 }
 
@@ -187,14 +190,10 @@ int main(int argc, char* argv[]) {
   cudaSetDevice(0);
   cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
 
-  // NVSHMEM symmetric memory allocations
-  Message* msg_queue = (Message*) nvshmem_malloc(sizeof(Message) * MSG_CNT_MAX);
-  int* msg_queue_head = (int*) nvshmem_malloc(sizeof(int));
-  int* msg_queue_tail = (int*) nvshmem_malloc(sizeof(int));
+  // Allocate message queue with NVSHMEM
+  size_t rbuf_size = (1 << 30);
+  ringbuf_t* rbuf = ringbuf_malloc(rbuf_size);
   nvshmem_barrier_all();
-  cudaMemcpyToSymbol(msg_queue_symbol, msg_queue, sizeof(Message*));
-  cudaMemcpyToSymbol(msg_queue_head_symbol, msg_queue_head, sizeof(int*));
-  cudaMemcpyToSymbol(msg_queue_tail_symbol, msg_queue_tail, sizeof(int*));
 
   // Launch scheduler
   int grid_size = (argc > 1) ? atoi(argv[1]) : 1;
@@ -202,7 +201,7 @@ int main(int argc, char* argv[]) {
   if (!rank) {
     printf("NVCHARM\nGrid size: %d\nBlock size: %d\n", grid_size, block_size);
   }
-  void* scheduler_args[3] = { &msg_queue, &msg_queue_head, &msg_queue_tail };
+  void* scheduler_args[2] = { &rbuf, &rbuf_size };
   nvshmemx_collective_launch((const void*)scheduler, grid_size, block_size,
       scheduler_args, 0, stream);
   cuda_check_error();
@@ -211,7 +210,7 @@ int main(int argc, char* argv[]) {
   nvshmem_barrier_all();
 
   // Finalize NVSHMEM and MPI
-  nvshmem_free(msg_queue);
+  ringbuf_free(rbuf);
   nvshmem_finalize();
   cudaStreamDestroy(stream);
   MPI_Finalize();
