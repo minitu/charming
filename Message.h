@@ -17,12 +17,12 @@ struct CreationMessage {
 
   __device__ CreationMessage(T obj_) : obj(obj_) {}
 };
-*/
 
 struct Message {
   int ep;
   int src_pe;
   void* data;
 };
+*/
 
 #endif // MESSAGE_H_

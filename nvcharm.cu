@@ -15,11 +15,10 @@
 
 __device__ EntryMethod* entry_methods[EM_CNT_MAX];
 
+/*
 __device__ inline void send(int dst_pe, Message* msg) {
-  /*
   int msg_idx = atomicAdd(&msg_cnt[sm], 1);
   msg_queue[MSG_IDX(sm,msg_idx)] = msg;
-  */
 }
 
 __device__ inline void recv(int my_pe, bool& terminate) {
@@ -37,10 +36,8 @@ __device__ inline void recv(int my_pe, bool& terminate) {
     msg = nullptr;
     processed++;
   }
-  */
 }
 
-/*
 // FIXME: Hard-coded limits
 #define EM_CNT_MAX 1024 // Maximum number of entry methods
 #define SM_CNT 80 // Number of SMs
@@ -133,9 +130,7 @@ __global__ void scheduler(DeviceCtx* ctx) {
     } while (!terminate);
   }
 }
-*/
 
-/*
 __global__ void simple_shift(int *destination) {
   int mype = nvshmem_my_pe();
   int npes = nvshmem_n_pes();
@@ -147,6 +142,13 @@ __global__ void simple_shift(int *destination) {
   }
 }
 */
+
+struct Message {
+  int i;
+  char c;
+
+  __device__ Message(int i_, char c_) : i(i_), c(c_) {}
+};
 
 __global__ void scheduler(ringbuf_t* rbuf, size_t rbuf_size) {
   if (!blockIdx.x && !threadIdx.x) {
@@ -162,6 +164,28 @@ __global__ void scheduler(ringbuf_t* rbuf, size_t rbuf_size) {
 
     // Initialize message queue
     ringbuf_init(rbuf, rbuf_size);
+
+    nvshmem_barrier_all();
+
+    ringbuf_off_t ret;
+    if (my_pe) {
+      if ((ret = ringbuf_acquire(rbuf, sizeof(Message), 0)) != -1) {
+        printf("PE %d: acquired %llu\n", my_pe, ret);
+        assert(ret < rbuf_size);
+        //Message msg(my_pe, 'a');
+        Message* msg = (Message*)malloc(sizeof(Message));
+        msg->i = my_pe;
+        msg->c = 'a';
+        // TODO: Following call fails
+        //nvshmem_char_put((char*)rbuf->ptr + ret, (char*)msg, sizeof(Message), 0);
+        nvshmem_quiet();
+        ringbuf_produce(rbuf, 0);
+      } else {
+        printf("PE %d: ringbuf_acquire failed\n", my_pe);
+      }
+    } else {
+      // TODO
+    }
 
     // Scheduler loop
     /*

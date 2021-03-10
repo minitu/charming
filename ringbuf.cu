@@ -18,19 +18,6 @@
 #define WRAP_INCR(x)  (((x) + 0x100000000UL) & WRAP_COUNTER)
 
 // NVSHMEM allocation: ringbuf metadata + seen_off * n_pes + actual buffer
-struct ringbuf {
-  size_t space;
-
-  // Point to starting address of ring buffer
-  void* ptr;
-
-  // Atomically updated by the producer
-  ringbuf_off_t next;
-  ringbuf_off_t end;
-
-  // Updated by the consumer
-  ringbuf_off_t written;
-};
 
 __device__ inline ringbuf_off_t* seen_off_addr(ringbuf_t* rbuf, int pe) {
   return (ringbuf_off_t*)((char*)rbuf + sizeof(ringbuf_t) + sizeof(ringbuf_off_t) * pe);
@@ -49,16 +36,20 @@ void ringbuf_free(ringbuf_t* rbuf) {
 
 __device__ void ringbuf_init(ringbuf_t* rbuf, size_t size) {
   //ringbuf_t* rbuf_local = (ringbuf_t*) nvshmem_ptr(rbuf, nvshmem_my_pe());
+  int n_pes = nvshmem_n_pes();
   rbuf->space = size;
-  rbuf->ptr = seen_off_addr(rbuf, nvshmem_n_pes());
+  rbuf->ptr = seen_off_addr(rbuf, n_pes);
   rbuf->next = 0;
   rbuf->end = 0;
   rbuf->written = 0;
-  *seen_off_addr(rbuf, nvshmem_my_pe()) = RBUF_OFF_MAX;
+  for (int pe = 0; pe < n_pes; pe++) {
+    *seen_off_addr(rbuf, pe) = RBUF_OFF_MAX;
+  }
   printf("PE %d initialized ringbuf, space: %lu, ptr: %p, next: %lld, end: %lld, written: %lld\n",
       nvshmem_my_pe(), rbuf->space, rbuf->ptr, rbuf->next, rbuf->end, rbuf->written);
 }
 
+// Atomically fetch 'next' until it doesn't have WRAP_LOCK_BIT set
 inline __device__ ringbuf_off_t stable_next_off(ringbuf_t* rbuf, int pe) {
   unsigned count = SPINLOCK_BACKOFF_MIN;
   ringbuf_off_t next;
@@ -72,6 +63,7 @@ retry:
   return next;
 }
 
+// Atomically fetch 'seen_off' until it doesn't have WRAP_LOCK_BIT set
 inline __device__ ringbuf_off_t stable_seen_off(ringbuf_t* rbuf, int pe) {
   int my_pe = nvshmem_my_pe();
   unsigned count = SPINLOCK_BACKOFF_MIN;
@@ -104,7 +96,7 @@ __device__ ringbuf_off_t ringbuf_acquire(ringbuf_t* rbuf, size_t size, int pe) {
     target = next + size;
     written = nvshmem_longlong_atomic_fetch(&rbuf->written, pe);
     if (next < written && target >= written) {
-      // Producer must wait
+      // There isn't enough space, producer must wait
       nvshmem_longlong_atomic_set(seen_off_addr(rbuf, my_pe), RBUF_OFF_MAX, pe);
       return -1;
     }
@@ -127,6 +119,7 @@ __device__ ringbuf_off_t ringbuf_acquire(ringbuf_t* rbuf, size_t size, int pe) {
   nvshmem_longlong_atomic_set(seen_off_addr(rbuf, my_pe), remote_seen_off & ~WRAP_LOCK_BIT, pe);
 
   if (target & WRAP_LOCK_BIT) {
+    // TODO: Remove assertions for performance?
     ringbuf_off_t written = nvshmem_longlong_atomic_fetch(&rbuf->written, pe);
     ringbuf_off_t end = nvshmem_longlong_atomic_fetch(&rbuf->end, pe);
     assert(written <= next);

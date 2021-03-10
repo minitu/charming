@@ -1,8 +1,23 @@
 #ifndef _RINGBUF_H_
 #define _RINGBUF_H_
 
-typedef struct ringbuf ringbuf_t;
 typedef long long ringbuf_off_t;
+
+struct ringbuf {
+  size_t space;
+
+  // Point to starting address of ring buffer
+  void* ptr;
+
+  // Atomically updated by the producer
+  ringbuf_off_t next;
+  ringbuf_off_t end;
+
+  // Updated by the consumer
+  ringbuf_off_t written;
+};
+typedef struct ringbuf ringbuf_t;
+
 
 ringbuf_t* ringbuf_malloc(size_t size);
 void ringbuf_free(ringbuf_t* rbuf);
