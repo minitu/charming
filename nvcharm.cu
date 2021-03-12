@@ -150,7 +150,8 @@ struct Message {
   __device__ Message(int i_, char c_) : i(i_), c(c_) {}
 };
 
-__global__ void scheduler(ringbuf_t* rbuf, size_t rbuf_size) {
+__global__ void scheduler(ringbuf_t* rbuf, size_t rbuf_size,
+                          single_ringbuf_t* mbuf, size_t mbuf_size) {
   if (!blockIdx.x && !threadIdx.x) {
     int my_pe = nvshmem_my_pe();
     int n_pes = nvshmem_n_pes();
@@ -164,27 +165,51 @@ __global__ void scheduler(ringbuf_t* rbuf, size_t rbuf_size) {
 
     // Initialize message queue
     ringbuf_init(rbuf, rbuf_size);
+    single_ringbuf_init(mbuf, mbuf_size);
 
     nvshmem_barrier_all();
 
-    ringbuf_off_t ret;
+    ringbuf_off_t rret, mret;
+    int dst_pe = 0;
     if (my_pe) {
-      if ((ret = ringbuf_acquire(rbuf, sizeof(Message), 0)) != -1) {
-        printf("PE %d: acquired %llu\n", my_pe, ret);
-        assert(ret < rbuf_size);
-        //Message msg(my_pe, 'a');
-        Message* msg = (Message*)malloc(sizeof(Message));
-        msg->i = my_pe;
-        msg->c = 'a';
-        // TODO: Following call fails
-        //nvshmem_char_put((char*)rbuf->ptr + ret, (char*)msg, sizeof(Message), 0);
-        nvshmem_quiet();
-        ringbuf_produce(rbuf, 0);
-      } else {
-        printf("PE %d: ringbuf_acquire failed\n", my_pe);
-      }
+      /*
+      // Secure region in destination PE's message queue
+      rret = ringbuf_acquire(rbuf, sizeof(Message), dst_pe);
+      assert(rret != -1 && rret < rbuf_size);
+      printf("PE %d: acquired %llu\n", my_pe, rret);
+
+      // Secure region in my message pool
+      mret = single_ringbuf_acquire(mbuf, sizeof(Message));
+      assert(mret != -1 && mret < mbuf_size);
+
+      // Populate message
+      Message* msg = (Message*)msg_buf;
+      msg->i = my_pe;
+      msg->c = 'a';
+
+      // Send message
+      nvshmem_char_put((char*)rbuf->ptr + ret, (char*)msg, sizeof(Message), dst_pe);
+      single_ringbuf_produce(mbuf);
+      nvshmem_quiet();
+      ringbuf_produce(rbuf, dst_pe);
+      */
     } else {
       // TODO
+      for (int i = 0; i < 3; i++) {
+        mret = single_ringbuf_acquire(mbuf, 32);
+        printf("acquired %lld\n", mret);
+        single_ringbuf_produce(mbuf);
+      }
+      for (int i = 0; i < 2; i++) {
+        size_t offset;
+        mret = single_ringbuf_consume(mbuf, &offset);
+        printf("consumed %lld, size %lld, release %d\n", offset, mret, 32);
+        single_ringbuf_release(mbuf, 32);
+      }
+      for (int i = 0; i < 32; i++) {
+        mret = single_ringbuf_acquire(mbuf, 4);
+        printf("acquired %lld\n", mret);
+      }
     }
 
     // Scheduler loop
@@ -215,8 +240,10 @@ int main(int argc, char* argv[]) {
   cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
 
   // Allocate message queue with NVSHMEM
-  size_t rbuf_size = (1 << 30);
+  size_t rbuf_size = (1 << 29);
   ringbuf_t* rbuf = ringbuf_malloc(rbuf_size);
+  size_t mbuf_size = (128);
+  single_ringbuf_t* mbuf = single_ringbuf_malloc(mbuf_size);
   nvshmem_barrier_all();
 
   // Launch scheduler
@@ -225,7 +252,7 @@ int main(int argc, char* argv[]) {
   if (!rank) {
     printf("NVCHARM\nGrid size: %d\nBlock size: %d\n", grid_size, block_size);
   }
-  void* scheduler_args[2] = { &rbuf, &rbuf_size };
+  void* scheduler_args[4] = { &rbuf, &rbuf_size, &mbuf, &mbuf_size };
   nvshmemx_collective_launch((const void*)scheduler, grid_size, block_size,
       scheduler_args, 0, stream);
   cuda_check_error();
@@ -234,6 +261,7 @@ int main(int argc, char* argv[]) {
   nvshmem_barrier_all();
 
   // Finalize NVSHMEM and MPI
+  single_ringbuf_free(mbuf);
   ringbuf_free(rbuf);
   nvshmem_finalize();
   cudaStreamDestroy(stream);
