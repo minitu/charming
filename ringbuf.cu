@@ -279,7 +279,6 @@ retry:
     // Producers did not advance
     return 0;
   }
-  printf("written: %llu, next: %llu\n", written, next);
 
   ready = RBUF_OFF_MAX;
 

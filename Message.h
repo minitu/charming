@@ -1,14 +1,17 @@
 #ifndef _MESSAGE_H_
 #define _MESSAGE_H_
 
-/*
 struct Message {
-  int chare_type;
-  int ep;
-  int src_sm;
-  void* data;
+  size_t size;
+  int chare_id;
+  int ep_id;
+
+  __device__ Message(size_t payload_size, int chare_id_, int ep_id_)
+    : size(sizeof(Message) + payload_size), chare_id(chare_id_), ep_id(ep_id_) {}
+  inline static __device__ size_t alloc_size(size_t size_) { return sizeof(Message) + size_; }
 };
 
+/*
 template <typename T>
 struct CreationMessage {
   T obj;
@@ -16,12 +19,6 @@ struct CreationMessage {
   int end_idx;
 
   __device__ CreationMessage(T obj_) : obj(obj_) {}
-};
-
-struct Message {
-  int ep;
-  int src_pe;
-  void* data;
 };
 */
 

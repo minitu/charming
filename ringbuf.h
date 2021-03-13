@@ -17,6 +17,8 @@ struct ringbuf {
 
   // Updated by the consumer
   ringbuf_off_t written;
+
+  __device__ void* addr(ringbuf_off_t offset) { return (void*)((char*)ptr + offset); }
 };
 typedef struct ringbuf ringbuf_t;
 

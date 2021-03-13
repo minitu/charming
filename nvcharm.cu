@@ -15,14 +15,32 @@
 
 __device__ EntryMethod* entry_methods[EM_CNT_MAX];
 
-/*
-__device__ inline void send(int dst_pe, Message* msg) {
-  int msg_idx = atomicAdd(&msg_cnt[sm], 1);
-  msg_queue[MSG_IDX(sm,msg_idx)] = msg;
+__device__ inline void send(int chare_id, int ep_id, int dst_pe,
+                            ringbuf_t* rbuf, size_t rbuf_size,
+                            single_ringbuf_t* mbuf, size_t mbuf_size) {
+  // Secure region in destination PE's message queue
+  ringbuf_off_t rret, mret;
+  size_t msg_size = Message::alloc_size(0);
+  while ((rret = ringbuf_acquire(rbuf, msg_size, dst_pe)) == -1) {}
+  assert(rret < rbuf_size);
+  printf("PE %d: acquired %llu\n", nvshmem_my_pe(), rret);
+
+  // Secure region in my message pool
+  mret = single_ringbuf_acquire(mbuf, msg_size);
+  assert(mret != -1 && mret < mbuf_size);
+
+  // Populate message
+  Message* msg = new (mbuf->addr(mret)) Message(0, chare_id, ep_id);
+  single_ringbuf_produce(mbuf);
+
+  // Send message
+  nvshmem_char_put((char*)rbuf->addr(rret), (char*)msg, msg->size, dst_pe);
+  nvshmem_quiet();
+  ringbuf_produce(rbuf, dst_pe);
 }
 
+/*
 __device__ inline void recv(int my_pe, bool& terminate) {
-  /*
   int* head_ptr = nvshmem_ptr(msg_queue_tail_symbol, my_pe);
   if (msg) {
 
@@ -143,13 +161,6 @@ __global__ void simple_shift(int *destination) {
 }
 */
 
-struct Message {
-  int i;
-  char c;
-
-  __device__ Message(int i_, char c_) : i(i_), c(c_) {}
-};
-
 __global__ void scheduler(ringbuf_t* rbuf, size_t rbuf_size,
                           single_ringbuf_t* mbuf, size_t mbuf_size) {
   if (!blockIdx.x && !threadIdx.x) {
@@ -169,55 +180,13 @@ __global__ void scheduler(ringbuf_t* rbuf, size_t rbuf_size,
 
     nvshmem_barrier_all();
 
-    ringbuf_off_t rret, mret;
-    int dst_pe = 0;
+    // TODO: Testing
     if (my_pe) {
-      /*
-      // Secure region in destination PE's message queue
-      rret = ringbuf_acquire(rbuf, sizeof(Message), dst_pe);
-      assert(rret != -1 && rret < rbuf_size);
-      printf("PE %d: acquired %llu\n", my_pe, rret);
-
-      // Secure region in my message pool
-      mret = single_ringbuf_acquire(mbuf, sizeof(Message));
-      assert(mret != -1 && mret < mbuf_size);
-
-      // Populate message
-      Message* msg = (Message*)msg_buf;
-      msg->i = my_pe;
-      msg->c = 'a';
-
-      // Send message
-      nvshmem_char_put((char*)rbuf->ptr + ret, (char*)msg, sizeof(Message), dst_pe);
-      single_ringbuf_produce(mbuf);
-      nvshmem_quiet();
-      ringbuf_produce(rbuf, dst_pe);
-      */
+      int dst_pe = 0;
+      send(my_pe, 0, dst_pe, rbuf, rbuf_size, mbuf, mbuf_size);
+      send(my_pe, -1, dst_pe, rbuf, rbuf_size, mbuf, mbuf_size);
     } else {
-      // TODO
-      for (int i = 0; i < 3; i++) {
-        mret = single_ringbuf_acquire(mbuf, 32);
-        printf("acquired %lld\n", mret);
-        single_ringbuf_produce(mbuf);
-      }
-      for (int i = 0; i < 2; i++) {
-        size_t offset;
-        mret = single_ringbuf_consume(mbuf, &offset);
-        printf("consumed %lld, size %lld, release %d\n", offset, mret, 32);
-        single_ringbuf_release(mbuf, 32);
-      }
-      for (int i = 0; i < 32; i++) {
-        mret = single_ringbuf_acquire(mbuf, 4);
-        printf("acquired %lld\n", mret);
-      }
     }
-
-    // Scheduler loop
-    /*
-    do {
-      recv(my_pe, terminate);
-    } while (!terminate);
-    */
   }
 }
 
@@ -242,7 +211,7 @@ int main(int argc, char* argv[]) {
   // Allocate message queue with NVSHMEM
   size_t rbuf_size = (1 << 29);
   ringbuf_t* rbuf = ringbuf_malloc(rbuf_size);
-  size_t mbuf_size = (128);
+  size_t mbuf_size = (1 << 28);
   single_ringbuf_t* mbuf = single_ringbuf_malloc(mbuf_size);
   nvshmem_barrier_all();
 
