@@ -23,7 +23,7 @@ __device__ inline void send(int chare_id, int ep_id, int dst_pe,
   size_t msg_size = Message::alloc_size(0);
   while ((rret = ringbuf_acquire(rbuf, msg_size, dst_pe)) == -1) {}
   assert(rret < rbuf_size);
-  printf("PE %d: acquired %llu\n", nvshmem_my_pe(), rret);
+  printf("PE %d: acquired %llu, msg size %llu\n", nvshmem_my_pe(), rret, msg_size);
 
   // Secure region in my message pool
   mret = single_ringbuf_acquire(mbuf, msg_size);
@@ -37,6 +37,35 @@ __device__ inline void send(int chare_id, int ep_id, int dst_pe,
   nvshmem_char_put((char*)rbuf->addr(rret), (char*)msg, msg->size, dst_pe);
   nvshmem_quiet();
   ringbuf_produce(rbuf, dst_pe);
+
+  // Free region in my message pool
+  size_t len, off;
+  len = single_ringbuf_consume(mbuf, &off);
+  single_ringbuf_release(mbuf, len);
+}
+
+__device__ inline ssize_t next_msg(void* addr, bool term_flags[]) {
+  Message* msg = (Message*)addr;
+  printf("PE %d received msg size %llu chare_id %d ep_id %d\n",
+      nvshmem_my_pe(), msg->size, msg->chare_id, msg->ep_id);
+  if (msg->ep_id == -1) term_flags[msg->chare_id] = true;
+
+  return msg->size;
+}
+
+__device__ inline void recv(ringbuf_t* rbuf, bool term_flags[]) {
+  size_t len, off;
+  if ((len = ringbuf_consume(rbuf, &off)) != 0) {
+    // Retrieved a contiguous range, there could be multiple messages
+    size_t rem = len;
+    ssize_t ret;
+    while (rem) {
+      ret = next_msg(rbuf->addr(off), term_flags);
+      off += ret;
+      rem -= ret;
+    }
+    ringbuf_release(rbuf, len);
+  }
 }
 
 /*
@@ -161,12 +190,18 @@ __global__ void simple_shift(int *destination) {
 }
 */
 
+__device__ bool check_terminate(bool flags[], int cnt) {
+  for (int i = 0; i < cnt; i++) {
+    if (!flags[i]) return false;
+  }
+  return true;
+}
+
 __global__ void scheduler(ringbuf_t* rbuf, size_t rbuf_size,
                           single_ringbuf_t* mbuf, size_t mbuf_size) {
   if (!blockIdx.x && !threadIdx.x) {
     int my_pe = nvshmem_my_pe();
     int n_pes = nvshmem_n_pes();
-    bool terminate = false;
 
     // Register user's entry methods
     register_entry_methods(entry_methods);
@@ -180,18 +215,27 @@ __global__ void scheduler(ringbuf_t* rbuf, size_t rbuf_size,
 
     nvshmem_barrier_all();
 
-    // TODO: Testing
+    // XXX: Testing
     if (my_pe) {
       int dst_pe = 0;
       send(my_pe, 0, dst_pe, rbuf, rbuf_size, mbuf, mbuf_size);
       send(my_pe, -1, dst_pe, rbuf, rbuf_size, mbuf, mbuf_size);
     } else {
+      // Receive messages and terminate
+      bool* term_flags = (bool*)malloc(sizeof(bool) * n_pes);
+      for (int i = 0; i < n_pes; i++) {
+        term_flags[i] = false;
+      }
+      term_flags[my_pe] = true;
+      do {
+        recv(rbuf, term_flags);
+      } while(!check_terminate(term_flags, n_pes));
     }
   }
 }
 
 int main(int argc, char* argv[]) {
-  int rank, msg;
+  int rank;
   cudaStream_t stream;
 
   // Initialize MPI
