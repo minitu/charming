@@ -33,11 +33,12 @@ __device__ void sleep(clock_value_t sleep_cycles) {
 __device__ EntryMethod* entry_methods[EM_CNT_MAX];
 
 __device__ inline void send(int chare_id, int ep_id, int dst_pe,
+                            size_t payload_size,
                             ringbuf_t* rbuf, size_t rbuf_size,
                             single_ringbuf_t* mbuf, size_t mbuf_size) {
   // Secure region in destination PE's message queue
   ringbuf_off_t rret, mret;
-  size_t msg_size = Message::alloc_size(0);
+  size_t msg_size = Message::alloc_size(payload_size);
   while ((rret = ringbuf_acquire(rbuf, msg_size, dst_pe)) == -1) {}
   assert(rret < rbuf_size);
   printf("PE %d: acquired %llu, msg size %llu\n", nvshmem_my_pe(), rret, msg_size);
@@ -47,7 +48,7 @@ __device__ inline void send(int chare_id, int ep_id, int dst_pe,
   assert(mret != -1 && mret < mbuf_size);
 
   // Populate message
-  Message* msg = new (mbuf->addr(mret)) Message(0, chare_id, ep_id);
+  Message* msg = new (mbuf->addr(mret)) Message(payload_size, chare_id, ep_id);
   single_ringbuf_produce(mbuf);
 
   // Send message
@@ -117,8 +118,9 @@ __global__ void scheduler(ringbuf_t* rbuf, size_t rbuf_size,
     // XXX: Testing
     if (my_pe != 0) {
       int dst_pe = 0;
-      send(my_pe, 0, dst_pe, rbuf, rbuf_size, mbuf, mbuf_size);
-      send(my_pe, -1, dst_pe, rbuf, rbuf_size, mbuf, mbuf_size);
+      size_t payload_size = 128;
+      send(my_pe, 0, dst_pe, payload_size, rbuf, rbuf_size, mbuf, mbuf_size);
+      send(my_pe, -1, dst_pe, payload_size, rbuf, rbuf_size, mbuf, mbuf_size);
     } else {
       // Receive messages and terminate
       bool* term_flags = (bool*)malloc(sizeof(bool) * n_pes);
@@ -152,7 +154,7 @@ int main(int argc, char* argv[]) {
   cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
 
   // Allocate message queue with NVSHMEM
-  size_t rbuf_size = (1 << 29);
+  size_t rbuf_size = (1 << 10);
   ringbuf_t* rbuf = ringbuf_malloc(rbuf_size);
   size_t mbuf_size = (1 << 28);
   single_ringbuf_t* mbuf = single_ringbuf_malloc(mbuf_size);
