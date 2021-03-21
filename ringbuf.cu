@@ -4,6 +4,7 @@
 
 #define SPINLOCK_BACKOFF_MIN 4
 #define SPINLOCK_BACKOFF_MAX 128
+// TODO: Not really exponential backoff
 #define SPINLOCK_BACKOFF(count)         \
   do {                                  \
     if ((count) < SPINLOCK_BACKOFF_MAX) \
@@ -89,6 +90,7 @@ __device__ ringbuf_off_t ringbuf_acquire(ringbuf_t* rbuf, size_t size, int pe) {
   do {
     ringbuf_off_t written;
 
+    // Store what I've seen as the 'next' value
     seen = stable_next_off(rbuf, pe);
     next = seen & RBUF_OFF_MASK;
     assert(next < rbuf->space);
@@ -157,6 +159,7 @@ retry:
   // Check all producers
   ready = RBUF_OFF_MAX;
   for (int i = 0; i < nvshmem_n_pes(); i++) {
+    // TODO: Move on to next producer when one is not stable?
     ringbuf_off_t seen_off = stable_seen_off(rbuf, i);
     if (seen_off >= written) {
       ready = llmin(seen_off, ready);

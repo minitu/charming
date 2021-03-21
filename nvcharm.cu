@@ -3,15 +3,32 @@
 #include <nvshmem.h>
 #include <nvshmemx.h>
 #include <mpi.h>
-#include "Message.h"
+#include "message.h"
 #include "user.h"
 #include "nvcharm.h"
 #include "ringbuf.h"
 
 #define DEBUG 0
 
-#define MSG_CNT_MAX 1e6 // Maximum number of messages per PE
 #define EM_CNT_MAX 1024 // Maximum number of entry methods
+
+/*
+__device__ uint get_smid() {
+  uint ret;
+  asm("mov.u32 %0, %smid;" : "=r"(ret) );
+  return ret;
+}
+
+using clock_value_t = long long;
+
+__device__ void sleep(clock_value_t sleep_cycles) {
+  clock_value_t start = clock64();
+  clock_value_t cycles_elapsed;
+  do {
+    cycles_elapsed = clock64() - start;
+  } while (cycles_elapsed < sleep_cycles);
+}
+*/
 
 __device__ EntryMethod* entry_methods[EM_CNT_MAX];
 
@@ -68,128 +85,6 @@ __device__ inline void recv(ringbuf_t* rbuf, bool term_flags[]) {
   }
 }
 
-/*
-__device__ inline void recv(int my_pe, bool& terminate) {
-  int* head_ptr = nvshmem_ptr(msg_queue_tail_symbol, my_pe);
-  if (msg) {
-
-    if (msg->ep == -1) {
-      terminate = true;
-    }
-
-    // Handle received message
-    entry_methods[msg->ep]->call();
-
-    msg = nullptr;
-    processed++;
-  }
-}
-
-// FIXME: Hard-coded limits
-#define EM_CNT_MAX 1024 // Maximum number of entry methods
-#define SM_CNT 80 // Number of SMs
-#define MSG_CNT_MAX 1024 // Maximum number of messages in message queue
-#define MSG_IDX(sm,idx) (MSG_CNT_MAX*(sm) + (idx))
-#define CHARE_CNT_MAX 1024 // Maxinum number of chare types
-
-__device__ ChareType* chare_types[SM_CNT * CHARE_CNT_MAX];
-__device__ int chare_cnt[SM_CNT];
-__device__ EntryMethod* entry_methods[EM_CNT_MAX];
-__device__ Message* msg_queue[SM_CNT * MSG_CNT_MAX];
-__device__ int msg_cnt[SM_CNT];
-__device__ int terminate[SM_CNT];
-
-__device__ uint get_smid() {
-  uint ret;
-  asm("mov.u32 %0, %smid;" : "=r"(ret) );
-  return ret;
-}
-
-using clock_value_t = long long;
-
-__device__ void sleep(clock_value_t sleep_cycles) {
-  clock_value_t start = clock64();
-  clock_value_t cycles_elapsed;
-  do {
-    cycles_elapsed = clock64() - start;
-  } while (cycles_elapsed < sleep_cycles);
-}
-
-__device__ void send(int sm, Message* msg) {
-  int msg_idx = atomicAdd(&msg_cnt[sm], 1);
-  msg_queue[MSG_IDX(sm,msg_idx)] = msg;
-#if DEBUG
-  printf("Stored message in idx %d, msg %p\n", MSG_IDX(sm,msg_idx), msg);
-#endif
-}
-
-__device__ void recv(int my_sm, int& processed, bool& terminate) {
-  // TODO: Recv doesn't happen without follownig print statement, why?
-#if DEBUG
-  printf("SM %d checking idx %d\n", my_sm, MSG_IDX(my_sm, processed));
-#endif
-  Message*& msg = msg_queue[MSG_IDX(my_sm, processed)];
-  if (msg) {
-#if DEBUG
-    printf("SM %d received message %p, SM %d, ep %d\n",
-        my_sm, msg, msg->src_sm, msg->ep);
-#endif
-
-    if (msg->ep == -1) {
-      terminate = true;
-#if DEBUG
-      printf("SM %d terminating\n", my_sm);
-#endif
-    }
-
-    // Handle received message
-    entry_methods[msg->ep]->call();
-
-    msg = nullptr;
-    processed++;
-  }
-}
-
-__global__ void scheduler(DeviceCtx* ctx) {
-  //const int my_sm = get_smid();
-  const int my_sm = blockIdx.x;
-  __shared__ int processed;
-  __shared__ bool terminate;
-
-  register_entry_methods(entry_methods);
-
-  // Leader thread in each thread block runs the scheduler loop
-  if (threadIdx.x == 0) {
-    processed = 0;
-    terminate = false;
-
-    if (blockIdx.x == 0) {
-      printf("SMs: %d\n", ctx->n_sms);
-
-      // Execute user's main function
-      charm_main();
-    }
-
-    // Scheduler loop
-    do {
-      recv(my_sm, processed, terminate);
-      //sleep(1);
-    } while (!terminate);
-  }
-}
-
-__global__ void simple_shift(int *destination) {
-  int mype = nvshmem_my_pe();
-  int npes = nvshmem_n_pes();
-  int peer = (mype + 1) % npes;
-
-  if (!blockIdx.x && !threadIdx.x) {
-    nvshmem_int_p(destination, mype, peer);
-    nvshmem_barrier_all();
-  }
-}
-*/
-
 __device__ bool check_terminate(bool flags[], int cnt) {
   for (int i = 0; i < cnt; i++) {
     if (!flags[i]) return false;
@@ -206,17 +101,21 @@ __global__ void scheduler(ringbuf_t* rbuf, size_t rbuf_size,
     // Register user's entry methods
     register_entry_methods(entry_methods);
 
-    // Execute user's main function
-    charm_main();
-
     // Initialize message queue
     ringbuf_init(rbuf, rbuf_size);
     single_ringbuf_init(mbuf, mbuf_size);
 
     nvshmem_barrier_all();
 
+    if (my_pe == 0) {
+      // Execute user's main function
+      charm_main();
+    }
+
+    nvshmem_barrier_all();
+
     // XXX: Testing
-    if (my_pe) {
+    if (my_pe != 0) {
       int dst_pe = 0;
       send(my_pe, 0, dst_pe, rbuf, rbuf_size, mbuf, mbuf_size);
       send(my_pe, -1, dst_pe, rbuf, rbuf_size, mbuf, mbuf_size);

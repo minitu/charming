@@ -11,15 +11,4 @@ struct Message {
   inline static __device__ size_t alloc_size(size_t size_) { return sizeof(Message) + size_; }
 };
 
-/*
-template <typename T>
-struct CreationMessage {
-  T obj;
-  int start_idx;
-  int end_idx;
-
-  __device__ CreationMessage(T obj_) : obj(obj_) {}
-};
-*/
-
 #endif // MESSAGE_H_
