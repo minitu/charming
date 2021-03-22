@@ -78,6 +78,7 @@ __device__ inline void recv(ringbuf_t* rbuf, bool term_flags[]) {
     size_t rem = len;
     ssize_t ret;
     while (rem) {
+      printf("PE %d, next msg at offset %llu\n", nvshmem_my_pe(), off);
       ret = next_msg(rbuf->addr(off), term_flags);
       off += ret;
       rem -= ret;
