@@ -32,8 +32,8 @@ __device__ void sleep(clock_value_t sleep_cycles) {
 
 __device__ EntryMethod* entry_methods[EM_CNT_MAX];
 
-__device__ inline void send(int chare_id, int ep_id, int dst_pe,
-                            size_t payload_size,
+__device__ inline void send(MsgType type, int chare_id, int ep_id,
+                            size_t payload_size, int dst_pe,
                             ringbuf_t* rbuf, size_t rbuf_size,
                             single_ringbuf_t* mbuf, size_t mbuf_size) {
   // Secure region in destination PE's message queue
@@ -48,7 +48,7 @@ __device__ inline void send(int chare_id, int ep_id, int dst_pe,
   assert(mret != -1 && mret < mbuf_size);
 
   // Populate message
-  Message* msg = new (mbuf->addr(mret)) Message(payload_size, chare_id, ep_id);
+  Message* msg = new (mbuf->addr(mret)) Message(type, chare_id, ep_id, payload_size);
   single_ringbuf_produce(mbuf);
 
   // Send message
@@ -64,9 +64,9 @@ __device__ inline void send(int chare_id, int ep_id, int dst_pe,
 
 __device__ inline ssize_t next_msg(void* addr, bool term_flags[]) {
   Message* msg = (Message*)addr;
-  printf("PE %d received msg size %llu chare_id %d ep_id %d\n",
-      nvshmem_my_pe(), msg->size, msg->chare_id, msg->ep_id);
-  if (msg->ep_id == -1) term_flags[msg->chare_id] = true;
+  printf("PE %d received msg type %d chare_id %d ep_id %d size %llu\n",
+      nvshmem_my_pe(), msg->type, msg->chare_id, msg->ep_id, msg->size);
+  if (msg->type == MsgType::Terminate) term_flags[msg->chare_id] = true;
 
   return msg->size;
 }
@@ -120,8 +120,8 @@ __global__ void scheduler(ringbuf_t* rbuf, size_t rbuf_size,
     if (my_pe != 0) {
       int dst_pe = 0;
       size_t payload_size = 128;
-      send(my_pe, 0, dst_pe, payload_size, rbuf, rbuf_size, mbuf, mbuf_size);
-      send(my_pe, -1, dst_pe, payload_size, rbuf, rbuf_size, mbuf, mbuf_size);
+      send(MsgType::Regular, my_pe, 0, payload_size, dst_pe, rbuf, rbuf_size, mbuf, mbuf_size);
+      send(MsgType::Terminate, my_pe, 0, payload_size, dst_pe, rbuf, rbuf_size, mbuf, mbuf_size);
     } else {
       // Receive messages and terminate
       bool* term_flags = (bool*)malloc(sizeof(bool) * n_pes);

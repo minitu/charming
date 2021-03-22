@@ -11,7 +11,6 @@
   }                                                                                  \
 }
 
-
 struct ChareType {
   int type_id;
 };
