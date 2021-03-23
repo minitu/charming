@@ -24,8 +24,8 @@ __device__ void Foo::morning() {
 
 __device__ void charm_main() {
   Foo a(9);
-  Chare<Foo> a_chare(a, 162);
-  a_chare.invoke(0,-1);
-  a_chare.invoke(1,3);
-  a_chare.invoke(-1,-1);
+  Chare<Foo> a_chare(a);
+  a_chare.invoke(0, 0);
+  a_chare.invoke(1, 1);
+  a_chare.invoke(2, 0);
 }

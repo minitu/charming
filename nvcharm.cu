@@ -32,27 +32,31 @@ __device__ void sleep(clock_value_t sleep_cycles) {
 
 __device__ EntryMethod* entry_methods[EM_CNT_MAX];
 
-__device__ inline void send(MsgType type, int chare_id, int ep_id,
-                            size_t payload_size, int dst_pe,
-                            ringbuf_t* rbuf, size_t rbuf_size,
-                            single_ringbuf_t* mbuf, size_t mbuf_size) {
+__device__ inline Envelope* createEnvelope(MsgType type, size_t msg_size,
+                                           single_ringbuf_t* mbuf, size_t mbuf_size) {
+  // Secure region in my message pool
+  ringbuf_off_t mret = single_ringbuf_acquire(mbuf, msg_size);
+  assert(mret != -1 && mret < mbuf_size);
+
+  // Create envelope
+  Envelope* env = new (mbuf->addr(mret)) Envelope(type, msg_size, nvshmem_my_pe());
+
+  return env;
+}
+
+__device__ inline void sendMsg(Envelope* env, size_t msg_size, int dst_pe,
+                               ringbuf_t* rbuf, size_t rbuf_size,
+                               single_ringbuf_t* mbuf, size_t mbuf_size) {
+  single_ringbuf_produce(mbuf);
+
   // Secure region in destination PE's message queue
-  ringbuf_off_t rret, mret;
-  size_t msg_size = Message::alloc_size(payload_size);
+  ringbuf_off_t rret;
   while ((rret = ringbuf_acquire(rbuf, msg_size, dst_pe)) == -1) {}
   assert(rret < rbuf_size);
   printf("PE %d: acquired %llu, msg size %llu\n", nvshmem_my_pe(), rret, msg_size);
 
-  // Secure region in my message pool
-  mret = single_ringbuf_acquire(mbuf, msg_size);
-  assert(mret != -1 && mret < mbuf_size);
-
-  // Populate message
-  Message* msg = new (mbuf->addr(mret)) Message(type, chare_id, ep_id, payload_size);
-  single_ringbuf_produce(mbuf);
-
   // Send message
-  nvshmem_char_put((char*)rbuf->addr(rret), (char*)msg, msg->size, dst_pe);
+  nvshmem_char_put((char*)rbuf->addr(rret), (char*)env, env->size, dst_pe);
   nvshmem_quiet();
   ringbuf_produce(rbuf, dst_pe);
 
@@ -62,13 +66,39 @@ __device__ inline void send(MsgType type, int chare_id, int ep_id,
   single_ringbuf_release(mbuf, len);
 }
 
-__device__ inline ssize_t next_msg(void* addr, bool term_flags[]) {
-  Message* msg = (Message*)addr;
-  printf("PE %d received msg type %d chare_id %d ep_id %d size %llu\n",
-      nvshmem_my_pe(), msg->type, msg->chare_id, msg->ep_id, msg->size);
-  if (msg->type == MsgType::Terminate) term_flags[msg->chare_id] = true;
+__device__ inline void sendTermMsg(int dst_pe, ringbuf_t* rbuf, size_t rbuf_size,
+                                   single_ringbuf_t* mbuf, size_t mbuf_size) {
+  size_t msg_size = Envelope::alloc_size(0);
+  Envelope* env = createEnvelope(MsgType::Terminate, msg_size, mbuf, mbuf_size);
 
-  return msg->size;
+  sendMsg(env, msg_size, dst_pe, rbuf, rbuf_size, mbuf, mbuf_size);
+}
+
+__device__ inline void sendRegMsg(int chare_id, int ep_id,
+                                  size_t payload_size, int dst_pe,
+                                  ringbuf_t* rbuf, size_t rbuf_size,
+                                  single_ringbuf_t* mbuf, size_t mbuf_size) {
+  size_t msg_size = Envelope::alloc_size(sizeof(RegularMsg) + payload_size);
+  Envelope* env = createEnvelope(MsgType::Regular, msg_size, mbuf, mbuf_size);
+
+  RegularMsg* reg_msg = new ((char*)env + sizeof(Envelope)) RegularMsg(chare_id, ep_id);
+  // TODO: Fill in payload
+
+  sendMsg(env, msg_size, dst_pe, rbuf, rbuf_size, mbuf, mbuf_size);
+}
+
+__device__ inline ssize_t next_msg(void* addr, bool term_flags[]) {
+  Envelope* env = (Envelope*)addr;
+  printf("PE %d received msg type %d size %llu PE %d\n", nvshmem_my_pe(), env->type, env->src_pe);
+  if (env->type == MsgType::Regular) {
+    RegularMsg* reg_msg = (RegularMsg*)((char*)env + sizeof(Envelope));
+    printf("PE %d regular message chare ID %d EP ID %d\n", nvshmem_my_pe(), reg_msg->chare_id, reg_msg->ep_id);
+  } else if (env->type == MsgType::Terminate) {
+    printf("PE %d terminate from PE %d\n", nvshmem_my_pe(), env->src_pe);
+    term_flags[env->src_pe] = true;
+  }
+
+  return env->size;
 }
 
 __device__ inline void recv(ringbuf_t* rbuf, bool term_flags[]) {
@@ -107,6 +137,8 @@ __global__ void scheduler(ringbuf_t* rbuf, size_t rbuf_size,
     ringbuf_init(rbuf, rbuf_size);
     single_ringbuf_init(mbuf, mbuf_size);
 
+    // TODO: Register all chares and entry methods
+
     nvshmem_barrier_all();
 
     if (my_pe == 0) {
@@ -119,9 +151,8 @@ __global__ void scheduler(ringbuf_t* rbuf, size_t rbuf_size,
     // XXX: Testing
     if (my_pe != 0) {
       int dst_pe = 0;
-      size_t payload_size = 128;
-      send(MsgType::Regular, my_pe, 0, payload_size, dst_pe, rbuf, rbuf_size, mbuf, mbuf_size);
-      send(MsgType::Terminate, my_pe, 0, payload_size, dst_pe, rbuf, rbuf_size, mbuf, mbuf_size);
+      sendRegMsg(my_pe, 0, 128, dst_pe, rbuf, rbuf_size, mbuf, mbuf_size);
+      sendTermMsg(dst_pe, rbuf, rbuf_size, mbuf, mbuf_size);
     } else {
       // Receive messages and terminate
       bool* term_flags = (bool*)malloc(sizeof(bool) * n_pes);
@@ -186,23 +217,7 @@ int main(int argc, char* argv[]) {
 }
 
 template <typename T>
-__device__ Chare<T>::Chare(T obj_, int n_chares_) : obj(obj_), n_chares(n_chares_) {
-  /*
-  // TODO: Create chare objects on all GPUs
-  mapping = new Mapping[SM_CNT];
-  int rem = n_chares % SM_CNT;
-  int start_idx = 0;
-  for (int i = 0; i < SM_CNT; i++) {
-    int n_chares_sm = n_chares / SM_CNT;
-    if (i < rem) n_chares_sm++;
-    mapping[i].sm_id = i;
-    mapping[i].start_idx = start_idx;
-    mapping[i].end_idx = start_idx + n_chares_sm - 1;
-    start_idx += n_chares_sm;
-
-    //CreationMessage<T>* create_msg = new CreationMessage<T>(obj);
-  }
-  */
+__device__ Chare<T>::Chare(T obj_) : obj(obj_) {
 }
 
 template <typename T>

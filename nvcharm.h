@@ -12,22 +12,14 @@
 }
 
 struct ChareType {
-  int type_id;
-};
-
-struct Mapping {
-  int sm_id;
-  int start_idx;
-  int end_idx;
+  int id;
 };
 
 template <typename T>
 struct Chare : ChareType {
   T obj;
-  int n_chares;
-  Mapping* mapping;
 
-  __device__ Chare(T obj_, int n_chares_);
+  __device__ Chare(T obj_);
   __device__ void invoke(int ep, int idx);
 };
 
