@@ -10,6 +10,7 @@
 
 #define DEBUG 0
 
+#define CHARE_TYPE_CNT_MAX 1024 // Maximum number of chares
 #define EM_CNT_MAX 1024 // Maximum number of entry methods
 
 /*
@@ -30,7 +31,8 @@ __device__ void sleep(clock_value_t sleep_cycles) {
 }
 */
 
-__device__ EntryMethod* entry_methods[EM_CNT_MAX];
+__device__ ChareType* chare_types[CHARE_TYPE_CNT_MAX];
+//__device__ EntryMethod* entry_methods[EM_CNT_MAX];
 
 __device__ inline Envelope* createEnvelope(MsgType type, size_t msg_size,
                                            single_ringbuf_t* mbuf, size_t mbuf_size) {
@@ -130,14 +132,12 @@ __global__ void scheduler(ringbuf_t* rbuf, size_t rbuf_size,
     int my_pe = nvshmem_my_pe();
     int n_pes = nvshmem_n_pes();
 
-    // Register user's entry methods
-    register_entry_methods(entry_methods);
+    // Register all chares and entry methods
+    register_chare_types(chare_types);
 
     // Initialize message queue
     ringbuf_init(rbuf, rbuf_size);
     single_ringbuf_init(mbuf, mbuf_size);
-
-    // TODO: Register all chares and entry methods
 
     nvshmem_barrier_all();
 
@@ -216,9 +216,10 @@ int main(int argc, char* argv[]) {
   return 0;
 }
 
+__device__ ChareType::ChareType(int id_) : id(id_) {}
+
 template <typename T>
-__device__ Chare<T>::Chare(T obj_) : obj(obj_) {
-}
+__device__ Chare<T>::Chare(int id_) : ChareType(id_), obj(nullptr) {}
 
 template <typename T>
 __device__ void Chare<T>::invoke(int ep, int idx) {
