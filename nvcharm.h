@@ -40,6 +40,7 @@ struct Chare : ChareType {
   EntryMethod** entry_methods;
 
   __device__ Chare(int id_);
+  __device__ static void create(const T& obj_, int pe);
   __device__ void invoke(int ep, int idx);
 };
 

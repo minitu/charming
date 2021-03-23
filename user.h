@@ -10,6 +10,10 @@ struct Foo {
   __device__ Foo(int i_) : i(i_) {}
   __device__ void hello();
   __device__ void morning();
+
+  __device__ size_t pack_size();
+  __device__ void pack(void* ptr);
+  __device__ void unpack(void* ptr);
 };
 
 struct Bar {

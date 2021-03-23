@@ -17,11 +17,23 @@ __device__ void register_chare_types(ChareType** chare_types) {
 }
 
 __device__ void Foo::hello() {
-  printf("Hello!\n");
+  printf("Hello! My int is %d\n", i);
 }
 
 __device__ void Foo::morning() {
   printf("Good morning!\n");
+}
+
+__device__ size_t Foo::pack_size() {
+  return sizeof(int);
+}
+
+__device__ void Foo::pack(void* ptr) {
+  *(int*)ptr = i;
+}
+
+__device__ void Foo::unpack(void* ptr) {
+  i = *(int*)ptr;
 }
 
 __device__ void Bar::hammer() {
@@ -29,4 +41,6 @@ __device__ void Bar::hammer() {
 }
 
 __device__ void charm_main() {
+  Foo my_obj;
+  Chare<Foo>::create(my_obj, -1);
 }

@@ -29,6 +29,9 @@ struct RegularMsg {
 };
 
 struct CreateMsg {
+  int chare_id;
+
+  __device__ CreateMsg(int chare_id_) : chare_id(chare_id_) {}
 };
 
 #endif // MESSAGE_H_

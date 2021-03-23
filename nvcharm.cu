@@ -31,6 +31,11 @@ __device__ void sleep(clock_value_t sleep_cycles) {
 }
 */
 
+__device__ ringbuf_t* rbuf;
+__device__ size_t rbuf_size;
+__device__ single_ringbuf_t* mbuf;
+__device__ size_t mbuf_size;
+
 __device__ ChareType* chare_types[CHARE_TYPE_CNT_MAX];
 //__device__ EntryMethod* entry_methods[EM_CNT_MAX];
 
@@ -46,9 +51,7 @@ __device__ inline Envelope* createEnvelope(MsgType type, size_t msg_size,
   return env;
 }
 
-__device__ inline void sendMsg(Envelope* env, size_t msg_size, int dst_pe,
-                               ringbuf_t* rbuf, size_t rbuf_size,
-                               single_ringbuf_t* mbuf, size_t mbuf_size) {
+__device__ inline void sendMsg(Envelope* env, size_t msg_size, int dst_pe) {
   single_ringbuf_produce(mbuf);
 
   // Secure region in destination PE's message queue
@@ -68,25 +71,25 @@ __device__ inline void sendMsg(Envelope* env, size_t msg_size, int dst_pe,
   single_ringbuf_release(mbuf, len);
 }
 
-__device__ inline void sendTermMsg(int dst_pe, ringbuf_t* rbuf, size_t rbuf_size,
-                                   single_ringbuf_t* mbuf, size_t mbuf_size) {
+__device__ inline void sendTermMsg(int dst_pe) {
   size_t msg_size = Envelope::alloc_size(0);
   Envelope* env = createEnvelope(MsgType::Terminate, msg_size, mbuf, mbuf_size);
 
-  sendMsg(env, msg_size, dst_pe, rbuf, rbuf_size, mbuf, mbuf_size);
+  sendMsg(env, msg_size, dst_pe);
 }
 
 __device__ inline void sendRegMsg(int chare_id, int ep_id,
-                                  size_t payload_size, int dst_pe,
-                                  ringbuf_t* rbuf, size_t rbuf_size,
-                                  single_ringbuf_t* mbuf, size_t mbuf_size) {
+                                  size_t payload_size, int dst_pe) {
   size_t msg_size = Envelope::alloc_size(sizeof(RegularMsg) + payload_size);
   Envelope* env = createEnvelope(MsgType::Regular, msg_size, mbuf, mbuf_size);
 
   RegularMsg* reg_msg = new ((char*)env + sizeof(Envelope)) RegularMsg(chare_id, ep_id);
   // TODO: Fill in payload
 
-  sendMsg(env, msg_size, dst_pe, rbuf, rbuf_size, mbuf, mbuf_size);
+  sendMsg(env, msg_size, dst_pe);
+}
+
+__device__ inline void sendCreateMsg(int dst_pe) {
 }
 
 __device__ inline ssize_t next_msg(void* addr, bool term_flags[]) {
@@ -103,7 +106,7 @@ __device__ inline ssize_t next_msg(void* addr, bool term_flags[]) {
   return env->size;
 }
 
-__device__ inline void recv(ringbuf_t* rbuf, bool term_flags[]) {
+__device__ inline void recv(bool term_flags[]) {
   size_t len, off;
   if ((len = ringbuf_consume(rbuf, &off)) != 0) {
     // Retrieved a contiguous range, there could be multiple messages
@@ -126,8 +129,7 @@ __device__ bool check_terminate(bool flags[], int cnt) {
   return true;
 }
 
-__global__ void scheduler(ringbuf_t* rbuf, size_t rbuf_size,
-                          single_ringbuf_t* mbuf, size_t mbuf_size) {
+__global__ void scheduler() {
   if (!blockIdx.x && !threadIdx.x) {
     int my_pe = nvshmem_my_pe();
     int n_pes = nvshmem_n_pes();
@@ -151,8 +153,8 @@ __global__ void scheduler(ringbuf_t* rbuf, size_t rbuf_size,
     // XXX: Testing
     if (my_pe != 0) {
       int dst_pe = 0;
-      sendRegMsg(my_pe, 0, 128, dst_pe, rbuf, rbuf_size, mbuf, mbuf_size);
-      sendTermMsg(dst_pe, rbuf, rbuf_size, mbuf, mbuf_size);
+      sendRegMsg(my_pe, 0, 128, dst_pe);
+      sendTermMsg(dst_pe);
     } else {
       // Receive messages and terminate
       bool* term_flags = (bool*)malloc(sizeof(bool) * n_pes);
@@ -161,7 +163,7 @@ __global__ void scheduler(ringbuf_t* rbuf, size_t rbuf_size,
       }
       term_flags[my_pe] = true;
       do {
-        recv(rbuf, term_flags);
+        recv(term_flags);
       } while(!check_terminate(term_flags, n_pes));
     }
   }
@@ -186,10 +188,10 @@ int main(int argc, char* argv[]) {
   cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
 
   // Allocate message queue with NVSHMEM
-  size_t rbuf_size = (1 << 10);
-  ringbuf_t* rbuf = ringbuf_malloc(rbuf_size);
-  size_t mbuf_size = (1 << 28);
-  single_ringbuf_t* mbuf = single_ringbuf_malloc(mbuf_size);
+  size_t h_rbuf_size = (1 << 10);
+  ringbuf_t* h_rbuf = ringbuf_malloc(h_rbuf_size);
+  size_t h_mbuf_size = (1 << 28);
+  single_ringbuf_t* h_mbuf = single_ringbuf_malloc(h_mbuf_size);
   nvshmem_barrier_all();
 
   // Launch scheduler
@@ -198,17 +200,22 @@ int main(int argc, char* argv[]) {
   if (!rank) {
     printf("NVCHARM\nGrid size: %d\nBlock size: %d\n", grid_size, block_size);
   }
-  void* scheduler_args[4] = { &rbuf, &rbuf_size, &mbuf, &mbuf_size };
+  //void* scheduler_args[4] = { &rbuf, &rbuf_size, &mbuf, &mbuf_size };
+  cudaMemcpyToSymbolAsync(rbuf, &h_rbuf, sizeof(ringbuf_t*), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(rbuf_size, &h_rbuf_size, sizeof(size_t), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(mbuf, &h_mbuf, sizeof(single_ringbuf_t*), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(mbuf_size, &h_mbuf_size, sizeof(size_t), 0, cudaMemcpyHostToDevice, stream);
   nvshmemx_collective_launch((const void*)scheduler, grid_size, block_size,
-      scheduler_args, 0, stream);
+      //scheduler_args, 0, stream);
+      nullptr, 0, stream);
   cuda_check_error();
   cudaStreamSynchronize(stream);
   //nvshmemx_barrier_all_on_stream(stream); // Hangs
   nvshmem_barrier_all();
 
   // Finalize NVSHMEM and MPI
-  single_ringbuf_free(mbuf);
-  ringbuf_free(rbuf);
+  single_ringbuf_free(h_mbuf);
+  ringbuf_free(h_rbuf);
   nvshmem_finalize();
   cudaStreamDestroy(stream);
   MPI_Finalize();
@@ -220,6 +227,19 @@ __device__ ChareType::ChareType(int id_) : id(id_) {}
 
 template <typename T>
 __device__ Chare<T>::Chare(int id_) : ChareType(id_), obj(nullptr) {}
+
+template <typename T>
+__device__ void Chare<T>::create(const T& obj_, int pe) {
+  /*
+  // Create one object for myself (PE 0)
+  obj = new T(obj_);
+
+  // TODO: Send creation messages to all PEs
+  size_t payload_size = obj_.pack_size();
+  size_t msg_size = Envelope::alloc_size(sizeof(CreateMsg) + payload_size);
+  Envelope* env = createEnvelope(MsgType::Create, msg_size, mbuf, mbuf_size);
+  */
+}
 
 template <typename T>
 __device__ void Chare<T>::invoke(int ep, int idx) {
