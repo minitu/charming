@@ -22,6 +22,10 @@ struct Bar {
   __device__ Bar() {}
   __device__ Bar(char ch_) : ch(ch_) {}
   __device__ void hammer();
+
+  __device__ size_t pack_size();
+  __device__ void pack(void* ptr);
+  __device__ void unpack(void* ptr);
 };
 
 template struct Chare<Foo>;

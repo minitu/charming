@@ -18,20 +18,22 @@ struct EntryMethod {
   //__device__ virtual void call() const = 0;
 };
 
-template <typename T>
+template <typename C, typename T>
 struct EntryMethodImpl : EntryMethod {
   nvstd::function<T> fn;
 
   __device__ EntryMethodImpl(int idx, nvstd::function<T> fn_)
     : EntryMethod(idx), fn(fn_) {}
   //__device__ virtual void call() const { fn(); }
-  __device__ void call(T chare) const { fn(chare); }
+  __device__ void call(C& chare) const { fn(chare); }
 };
 
 struct ChareType {
   int id; // FIXME: Needed?
 
   __device__ ChareType(int id_);
+  __device__ virtual void unpack(void* ptr) = 0;
+  __device__ virtual void call(int ep) = 0;
 };
 
 template <typename T>
@@ -40,12 +42,16 @@ struct Chare : ChareType {
   EntryMethod** entry_methods;
 
   __device__ Chare(int id_);
-  __device__ static void create(const T& obj_, int pe);
+  __device__ void create(T& obj_);
   __device__ void invoke(int ep, int idx);
+  __device__ virtual void unpack(void* ptr) { obj->unpack(ptr); }
+  __device__ virtual void call(int ep) {
+    // TODO
+  }
 };
 
 // User functions required by the runtime
 __device__ void register_chare_types(ChareType** chare_types);
-__device__ void charm_main();
+__device__ void charm_main(ChareType** chare_types);
 
 #endif

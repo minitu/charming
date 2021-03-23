@@ -39,8 +39,7 @@ __device__ size_t mbuf_size;
 __device__ ChareType* chare_types[CHARE_TYPE_CNT_MAX];
 //__device__ EntryMethod* entry_methods[EM_CNT_MAX];
 
-__device__ inline Envelope* createEnvelope(MsgType type, size_t msg_size,
-                                           single_ringbuf_t* mbuf, size_t mbuf_size) {
+__device__ inline Envelope* createEnvelope(MsgType type, size_t msg_size) {
   // Secure region in my message pool
   ringbuf_off_t mret = single_ringbuf_acquire(mbuf, msg_size);
   assert(mret != -1 && mret < mbuf_size);
@@ -73,7 +72,7 @@ __device__ inline void sendMsg(Envelope* env, size_t msg_size, int dst_pe) {
 
 __device__ inline void sendTermMsg(int dst_pe) {
   size_t msg_size = Envelope::alloc_size(0);
-  Envelope* env = createEnvelope(MsgType::Terminate, msg_size, mbuf, mbuf_size);
+  Envelope* env = createEnvelope(MsgType::Terminate, msg_size);
 
   sendMsg(env, msg_size, dst_pe);
 }
@@ -81,7 +80,7 @@ __device__ inline void sendTermMsg(int dst_pe) {
 __device__ inline void sendRegMsg(int chare_id, int ep_id,
                                   size_t payload_size, int dst_pe) {
   size_t msg_size = Envelope::alloc_size(sizeof(RegularMsg) + payload_size);
-  Envelope* env = createEnvelope(MsgType::Regular, msg_size, mbuf, mbuf_size);
+  Envelope* env = createEnvelope(MsgType::Regular, msg_size);
 
   RegularMsg* reg_msg = new ((char*)env + sizeof(Envelope)) RegularMsg(chare_id, ep_id);
   // TODO: Fill in payload
@@ -89,13 +88,16 @@ __device__ inline void sendRegMsg(int chare_id, int ep_id,
   sendMsg(env, msg_size, dst_pe);
 }
 
-__device__ inline void sendCreateMsg(int dst_pe) {
-}
-
 __device__ inline ssize_t next_msg(void* addr, bool term_flags[]) {
   Envelope* env = (Envelope*)addr;
-  printf("PE %d received msg type %d size %llu PE %d\n", nvshmem_my_pe(), env->type, env->src_pe);
-  if (env->type == MsgType::Regular) {
+  printf("PE %d received msg type %d size %llu src PE %d\n", nvshmem_my_pe(), env->type, env->size, env->src_pe);
+  if (env->type == MsgType::Create) {
+    CreateMsg* create_msg = (CreateMsg*)((char*)env + sizeof(Envelope));
+    printf("PE %d creation message chare ID %d\n", nvshmem_my_pe(), create_msg->chare_id);
+    ChareType* chare_type = chare_types[create_msg->chare_id];
+    chare_type->unpack((char*)create_msg + sizeof(CreateMsg));
+    term_flags[0] = true;
+  } else if (env->type == MsgType::Regular) {
     RegularMsg* reg_msg = (RegularMsg*)((char*)env + sizeof(Envelope));
     printf("PE %d regular message chare ID %d EP ID %d\n", nvshmem_my_pe(), reg_msg->chare_id, reg_msg->ep_id);
   } else if (env->type == MsgType::Terminate) {
@@ -145,12 +147,13 @@ __global__ void scheduler() {
 
     if (my_pe == 0) {
       // Execute user's main function
-      charm_main();
+      charm_main(chare_types);
     }
 
     nvshmem_barrier_all();
 
     // XXX: Testing
+    /*
     if (my_pe != 0) {
       int dst_pe = 0;
       sendRegMsg(my_pe, 0, 128, dst_pe);
@@ -165,6 +168,14 @@ __global__ void scheduler() {
       do {
         recv(term_flags);
       } while(!check_terminate(term_flags, n_pes));
+    }
+    */
+    if (my_pe != 0) {
+      // Receive messages and terminate
+      bool term_flags = false;
+      do {
+        recv(&term_flags);
+      } while(!check_terminate(&term_flags, 1));
     }
   }
 }
@@ -228,17 +239,26 @@ __device__ ChareType::ChareType(int id_) : id(id_) {}
 template <typename T>
 __device__ Chare<T>::Chare(int id_) : ChareType(id_), obj(nullptr) {}
 
+// TODO: Currently 1 chare per PE
 template <typename T>
-__device__ void Chare<T>::create(const T& obj_, int pe) {
-  /*
+__device__ void Chare<T>::create(T& obj_) {
   // Create one object for myself (PE 0)
   obj = new T(obj_);
 
-  // TODO: Send creation messages to all PEs
-  size_t payload_size = obj_.pack_size();
-  size_t msg_size = Envelope::alloc_size(sizeof(CreateMsg) + payload_size);
-  Envelope* env = createEnvelope(MsgType::Create, msg_size, mbuf, mbuf_size);
-  */
+  // Send creation messages to all other PEs
+  int my_pe = nvshmem_my_pe();
+  for (int pe = 0; pe < nvshmem_n_pes(); pe++) {
+    if (pe == my_pe) continue;
+
+    size_t payload_size = obj_.pack_size();
+    size_t msg_size = Envelope::alloc_size(sizeof(CreateMsg) + payload_size);
+    Envelope* env = createEnvelope(MsgType::Create, msg_size);
+
+    CreateMsg* create_msg = new ((char*)env + sizeof(Envelope)) CreateMsg(id);
+    obj_.pack((char*)create_msg + sizeof(CreateMsg));
+
+    sendMsg(env, msg_size, pe);
+  }
 }
 
 template <typename T>
