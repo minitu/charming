@@ -11,7 +11,6 @@
 #define DEBUG 0
 
 #define CHARE_TYPE_CNT_MAX 1024 // Maximum number of chares
-#define EM_CNT_MAX 1024 // Maximum number of entry methods
 
 /*
 __device__ uint get_smid() {
@@ -37,7 +36,6 @@ __device__ single_ringbuf_t* mbuf;
 __device__ size_t mbuf_size;
 
 __device__ ChareType* chare_types[CHARE_TYPE_CNT_MAX];
-//__device__ EntryMethod* entry_methods[EM_CNT_MAX];
 
 __device__ inline Envelope* createEnvelope(MsgType type, size_t msg_size) {
   // Secure region in my message pool
@@ -94,7 +92,8 @@ __device__ inline ssize_t next_msg(void* addr, bool term_flags[]) {
   if (env->type == MsgType::Create) {
     CreateMsg* create_msg = (CreateMsg*)((char*)env + sizeof(Envelope));
     printf("PE %d creation message chare ID %d\n", nvshmem_my_pe(), create_msg->chare_id);
-    ChareType* chare_type = chare_types[create_msg->chare_id];
+    ChareType*& chare_type = chare_types[create_msg->chare_id];
+    chare_type->alloc();
     chare_type->unpack((char*)create_msg + sizeof(CreateMsg));
     term_flags[0] = true;
   } else if (env->type == MsgType::Regular) {
@@ -234,16 +233,11 @@ int main(int argc, char* argv[]) {
   return 0;
 }
 
-__device__ ChareType::ChareType(int id_) : id(id_) {}
-
-template <typename T>
-__device__ Chare<T>::Chare(int id_) : ChareType(id_), obj(nullptr) {}
-
 // TODO: Currently 1 chare per PE
 template <typename T>
 __device__ void Chare<T>::create(T& obj_) {
   // Create one object for myself (PE 0)
-  obj = new T(obj_);
+  alloc(obj_);
 
   // Send creation messages to all other PEs
   int my_pe = nvshmem_my_pe();

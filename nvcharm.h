@@ -15,7 +15,7 @@ struct EntryMethod {
   int idx; // FIXME: Needed?
 
   __device__ EntryMethod(int idx_) : idx(idx_) {}
-  //__device__ virtual void call() const = 0;
+  __device__ virtual void call(void* chare) const = 0;
 };
 
 template <typename C, typename T>
@@ -24,30 +24,30 @@ struct EntryMethodImpl : EntryMethod {
 
   __device__ EntryMethodImpl(int idx, nvstd::function<T> fn_)
     : EntryMethod(idx), fn(fn_) {}
-  //__device__ virtual void call() const { fn(); }
-  __device__ void call(C& chare) const { fn(chare); }
+  __device__ virtual void call(void* chare) const { fn(*(C*)chare); }
 };
 
 struct ChareType {
   int id; // FIXME: Needed?
 
-  __device__ ChareType(int id_);
+  __device__ ChareType(int id_) : id(id_) {}
+  __device__ virtual void alloc() = 0;
   __device__ virtual void unpack(void* ptr) = 0;
   __device__ virtual void call(int ep) = 0;
 };
 
-template <typename T>
+template <typename C>
 struct Chare : ChareType {
-  T* obj;
+  C* obj;
   EntryMethod** entry_methods;
 
-  __device__ Chare(int id_);
-  __device__ void create(T& obj_);
+  __device__ Chare(int id_) : ChareType(id_), obj(nullptr), entry_methods(nullptr) {}
+  __device__ void create(C& obj_);
   __device__ void invoke(int ep, int idx);
+  __device__ void alloc(C& obj_) { obj = new C(obj_); }
+  __device__ virtual void alloc() { obj = new C; }
   __device__ virtual void unpack(void* ptr) { obj->unpack(ptr); }
-  __device__ virtual void call(int ep) {
-    // TODO
-  }
+  __device__ virtual void call(int ep) { entry_methods[ep]->call(obj); }
 };
 
 // User functions required by the runtime

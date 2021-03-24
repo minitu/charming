@@ -31,10 +31,12 @@ __device__ size_t Foo::pack_size() {
 
 __device__ void Foo::pack(void* ptr) {
   *(int*)ptr = i;
+  printf("Foo packed %d at ptr %p\n", *(int*)ptr, ptr);
 }
 
 __device__ void Foo::unpack(void* ptr) {
   i = *(int*)ptr;
+  printf("Foo unpacked %d from ptr %p\n", i, ptr);
 }
 
 // Bar
@@ -56,7 +58,7 @@ __device__ void Bar::unpack(void* ptr) {
 
 // Main
 __device__ void charm_main(ChareType** chare_types) {
-  Foo my_obj;
+  Foo my_obj(1);
   Chare<Foo>* my_chare = static_cast<Chare<Foo>*>(chare_types[0]);
   my_chare->create(my_obj);
 }
