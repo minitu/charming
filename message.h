@@ -34,4 +34,4 @@ struct CreateMsg {
   __device__ CreateMsg(int chare_id_) : chare_id(chare_id_) {}
 };
 
-#endif // MESSAGE_H_
+#endif // _MESSAGE_H_
