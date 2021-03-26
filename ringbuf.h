@@ -20,33 +20,33 @@ struct ringbuf {
 
   __device__ void* addr(ringbuf_off_t offset) { return (void*)((char*)ptr + offset); }
 };
-typedef struct ringbuf ringbuf_t;
+typedef struct ringbuf mpsc_ringbuf_t;
 
-ringbuf_t* ringbuf_malloc(size_t size);
-void ringbuf_free(ringbuf_t* rbuf);
+mpsc_ringbuf_t* mpsc_ringbuf_malloc(size_t size);
+void mpsc_ringbuf_free(mpsc_ringbuf_t* rbuf);
 
-__device__ void ringbuf_init(ringbuf_t* rbuf, size_t size);
+__device__ void mpsc_ringbuf_init(mpsc_ringbuf_t* rbuf, size_t size);
 
-__device__ ringbuf_off_t ringbuf_acquire(ringbuf_t* rbuf, size_t size, int pe);
-__device__ void ringbuf_produce(ringbuf_t* rbuf, int pe);
+__device__ ringbuf_off_t mpsc_ringbuf_acquire(mpsc_ringbuf_t* rbuf, size_t size, int pe);
+__device__ void mpsc_ringbuf_produce(mpsc_ringbuf_t* rbuf, int pe);
 
-__device__ size_t ringbuf_consume(ringbuf_t* rbuf, size_t* offset);
-__device__ void ringbuf_release(ringbuf_t* rbuf, size_t size);
+__device__ size_t mpsc_ringbuf_consume(mpsc_ringbuf_t* rbuf, size_t* offset);
+__device__ void mpsc_ringbuf_release(mpsc_ringbuf_t* rbuf, size_t size);
 
 /* Single producer & consumer (same PE) ring buffer */
 
-typedef struct ringbuf single_ringbuf_t;
+typedef struct ringbuf spsc_ringbuf_t;
 
-single_ringbuf_t* single_ringbuf_malloc(size_t size);
-void single_ringbuf_free(single_ringbuf_t* rbuf);
+spsc_ringbuf_t* spsc_ringbuf_malloc(size_t size);
+void spsc_ringbuf_free(spsc_ringbuf_t* rbuf);
 
-__device__ void single_ringbuf_init(single_ringbuf_t* rbuf, size_t size);
+__device__ void spsc_ringbuf_init(spsc_ringbuf_t* rbuf, size_t size);
 
-__device__ ringbuf_off_t single_ringbuf_acquire(single_ringbuf_t* rbuf, size_t size);
-__device__ void single_ringbuf_produce(single_ringbuf_t* rbuf);
+__device__ ringbuf_off_t spsc_ringbuf_acquire(spsc_ringbuf_t* rbuf, size_t size);
+__device__ void spsc_ringbuf_produce(spsc_ringbuf_t* rbuf);
 
-__device__ size_t single_ringbuf_consume(single_ringbuf_t* rbuf, size_t* offset);
-__device__ void single_ringbuf_release(single_ringbuf_t* rbuf, size_t size);
+__device__ size_t spsc_ringbuf_consume(spsc_ringbuf_t* rbuf, size_t* offset);
+__device__ void spsc_ringbuf_release(spsc_ringbuf_t* rbuf, size_t size);
 
 
 #endif // _RINGBUF_H_

@@ -28,16 +28,16 @@ __device__ void sleep(clock_value_t sleep_cycles) {
 }
 */
 
-__device__ ringbuf_t* rbuf;
+__device__ mpsc_ringbuf_t* rbuf;
 __device__ size_t rbuf_size;
-__device__ single_ringbuf_t* mbuf;
+__device__ spsc_ringbuf_t* mbuf;
 __device__ size_t mbuf_size;
 
 __device__ ChareType* chare_types[CHARE_TYPE_CNT_MAX];
 
 __device__ inline Envelope* create_envelope(MsgType type, size_t msg_size) {
   // Secure region in my message pool
-  ringbuf_off_t mret = single_ringbuf_acquire(mbuf, msg_size);
+  ringbuf_off_t mret = spsc_ringbuf_acquire(mbuf, msg_size);
   assert(mret != -1 && mret < mbuf_size);
 
   // Create envelope
@@ -47,22 +47,22 @@ __device__ inline Envelope* create_envelope(MsgType type, size_t msg_size) {
 }
 
 __device__ inline void send_msg(Envelope* env, size_t msg_size, int dst_pe) {
-  single_ringbuf_produce(mbuf);
+  spsc_ringbuf_produce(mbuf);
 
   // Secure region in destination PE's message queue
   ringbuf_off_t rret;
-  while ((rret = ringbuf_acquire(rbuf, msg_size, dst_pe)) == -1) {}
+  while ((rret = mpsc_ringbuf_acquire(rbuf, msg_size, dst_pe)) == -1) {}
   assert(rret < rbuf_size);
 
   // Send message
   nvshmem_char_put((char*)rbuf->addr(rret), (char*)env, env->size, dst_pe);
   nvshmem_quiet();
-  ringbuf_produce(rbuf, dst_pe);
+  mpsc_ringbuf_produce(rbuf, dst_pe);
 
   // Free region in my message pool
   size_t len, off;
-  len = single_ringbuf_consume(mbuf, &off);
-  single_ringbuf_release(mbuf, len);
+  len = spsc_ringbuf_consume(mbuf, &off);
+  spsc_ringbuf_release(mbuf, len);
 }
 
 __device__ inline void send_term_msg(int dst_pe) {
@@ -120,7 +120,7 @@ __device__ inline ssize_t next_msg(void* addr, bool& term_flag) {
 
 __device__ inline void recv(bool &term_flag) {
   size_t len, off;
-  if ((len = ringbuf_consume(rbuf, &off)) != 0) {
+  if ((len = mpsc_ringbuf_consume(rbuf, &off)) != 0) {
     // Retrieved a contiguous range, there could be multiple messages
     size_t rem = len;
     ssize_t ret;
@@ -129,7 +129,7 @@ __device__ inline void recv(bool &term_flag) {
       off += ret;
       rem -= ret;
     }
-    ringbuf_release(rbuf, len);
+    mpsc_ringbuf_release(rbuf, len);
   }
 }
 
@@ -143,8 +143,8 @@ __global__ void scheduler() {
     register_chare_types(chare_types);
 
     // Initialize message queue
-    ringbuf_init(rbuf, rbuf_size);
-    single_ringbuf_init(mbuf, mbuf_size);
+    mpsc_ringbuf_init(rbuf, rbuf_size);
+    spsc_ringbuf_init(mbuf, mbuf_size);
 
     nvshmem_barrier_all();
 
@@ -182,9 +182,9 @@ int main(int argc, char* argv[]) {
 
   // Allocate message queue with NVSHMEM
   size_t h_rbuf_size = (1 << 10);
-  ringbuf_t* h_rbuf = ringbuf_malloc(h_rbuf_size);
+  mpsc_ringbuf_t* h_rbuf = mpsc_ringbuf_malloc(h_rbuf_size);
   size_t h_mbuf_size = (1 << 28);
-  single_ringbuf_t* h_mbuf = single_ringbuf_malloc(h_mbuf_size);
+  spsc_ringbuf_t* h_mbuf = spsc_ringbuf_malloc(h_mbuf_size);
   nvshmem_barrier_all();
 
   // Launch scheduler
@@ -194,9 +194,9 @@ int main(int argc, char* argv[]) {
     printf("NVCHARM\nGrid size: %d\nBlock size: %d\n", grid_size, block_size);
   }
   //void* scheduler_args[4] = { &rbuf, &rbuf_size, &mbuf, &mbuf_size };
-  cudaMemcpyToSymbolAsync(rbuf, &h_rbuf, sizeof(ringbuf_t*), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(rbuf, &h_rbuf, sizeof(mpsc_ringbuf_t*), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(rbuf_size, &h_rbuf_size, sizeof(size_t), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(mbuf, &h_mbuf, sizeof(single_ringbuf_t*), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(mbuf, &h_mbuf, sizeof(spsc_ringbuf_t*), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(mbuf_size, &h_mbuf_size, sizeof(size_t), 0, cudaMemcpyHostToDevice, stream);
   nvshmemx_collective_launch((const void*)scheduler, grid_size, block_size,
       //scheduler_args, 0, stream);
@@ -207,8 +207,8 @@ int main(int argc, char* argv[]) {
   nvshmem_barrier_all();
 
   // Finalize NVSHMEM and MPI
-  single_ringbuf_free(h_mbuf);
-  ringbuf_free(h_rbuf);
+  spsc_ringbuf_free(h_mbuf);
+  mpsc_ringbuf_free(h_rbuf);
   nvshmem_finalize();
   cudaStreamDestroy(stream);
   MPI_Finalize();

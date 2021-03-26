@@ -22,22 +22,22 @@
 
 // NVSHMEM allocation: ringbuf metadata + seen_off * n_pes + actual buffer
 
-__device__ inline ringbuf_off_t* seen_off_addr(ringbuf_t* rbuf, int pe) {
-  return (ringbuf_off_t*)((char*)rbuf + sizeof(ringbuf_t) + sizeof(ringbuf_off_t) * pe);
+__device__ inline ringbuf_off_t* seen_off_addr(mpsc_ringbuf_t* rbuf, int pe) {
+  return (ringbuf_off_t*)((char*)rbuf + sizeof(mpsc_ringbuf_t) + sizeof(ringbuf_off_t) * pe);
 }
 
-ringbuf_t* ringbuf_malloc(size_t size) {
-  size_t alloc_size = sizeof(ringbuf_t) + sizeof(ringbuf_off_t) * nvshmem_n_pes() + size;
-  ringbuf_t* ringbuf_all = (ringbuf_t*)nvshmem_malloc(alloc_size);
+mpsc_ringbuf_t* mpsc_ringbuf_malloc(size_t size) {
+  size_t alloc_size = sizeof(mpsc_ringbuf_t) + sizeof(ringbuf_off_t) * nvshmem_n_pes() + size;
+  mpsc_ringbuf_t* ringbuf_all = (mpsc_ringbuf_t*)nvshmem_malloc(alloc_size);
   assert(ringbuf_all);
   return ringbuf_all;
 }
 
-void ringbuf_free(ringbuf_t* rbuf) {
+void mpsc_ringbuf_free(mpsc_ringbuf_t* rbuf) {
   nvshmem_free(rbuf);
 }
 
-__device__ void ringbuf_init(ringbuf_t* rbuf, size_t size) {
+__device__ void mpsc_ringbuf_init(mpsc_ringbuf_t* rbuf, size_t size) {
   int n_pes = nvshmem_n_pes();
   rbuf->space = size;
   rbuf->ptr = seen_off_addr(rbuf, n_pes);
@@ -50,7 +50,7 @@ __device__ void ringbuf_init(ringbuf_t* rbuf, size_t size) {
 }
 
 // Atomically fetch 'next' until it doesn't have WRAP_LOCK_BIT set
-inline __device__ ringbuf_off_t stable_next_off(ringbuf_t* rbuf, int pe) {
+inline __device__ ringbuf_off_t stable_next_off(mpsc_ringbuf_t* rbuf, int pe) {
   unsigned count = SPINLOCK_BACKOFF_MIN;
   ringbuf_off_t next;
 retry:
@@ -64,7 +64,7 @@ retry:
 }
 
 // Atomically fetch 'seen_off' until it doesn't have WRAP_LOCK_BIT set
-inline __device__ ringbuf_off_t stable_seen_off(ringbuf_t* rbuf, int pe) {
+inline __device__ ringbuf_off_t stable_seen_off(mpsc_ringbuf_t* rbuf, int pe) {
   int my_pe = nvshmem_my_pe();
   unsigned count = SPINLOCK_BACKOFF_MIN;
   ringbuf_off_t seen_off;
@@ -77,7 +77,7 @@ retry:
   return seen_off;
 }
 
-__device__ ringbuf_off_t ringbuf_acquire(ringbuf_t* rbuf, size_t size, int pe) {
+__device__ ringbuf_off_t mpsc_ringbuf_acquire(mpsc_ringbuf_t* rbuf, size_t size, int pe) {
   int my_pe = nvshmem_my_pe();
   ringbuf_off_t seen, next, target;
 
@@ -136,7 +136,7 @@ __device__ ringbuf_off_t ringbuf_acquire(ringbuf_t* rbuf, size_t size, int pe) {
   return next;
 }
 
-__device__ void ringbuf_produce(ringbuf_t* rbuf, int pe) {
+__device__ void mpsc_ringbuf_produce(mpsc_ringbuf_t* rbuf, int pe) {
   int my_pe = nvshmem_my_pe();
   /* Removed assertion for performance
   ringbuf_off_t remote_seen_off = nvshmem_longlong_atomic_fetch(seen_off_addr(rbuf, my_pe), pe);
@@ -145,7 +145,7 @@ __device__ void ringbuf_produce(ringbuf_t* rbuf, int pe) {
   nvshmem_longlong_atomic_set(seen_off_addr(rbuf, my_pe), RBUF_OFF_MAX, pe);
 }
 
-__device__ size_t ringbuf_consume(ringbuf_t* rbuf, size_t* offset) {
+__device__ size_t mpsc_ringbuf_consume(mpsc_ringbuf_t* rbuf, size_t* offset) {
   int my_pe = nvshmem_my_pe();
   ringbuf_off_t written = rbuf->written, next, ready;
   size_t towrite;
@@ -196,7 +196,7 @@ retry:
   return towrite;
 }
 
-__device__ void ringbuf_release(ringbuf_t* rbuf, size_t size) {
+__device__ void mpsc_ringbuf_release(mpsc_ringbuf_t* rbuf, size_t size) {
   const size_t written = rbuf->written + size;
 
   assert(rbuf->written <= rbuf->space);
@@ -210,26 +210,26 @@ __device__ void ringbuf_release(ringbuf_t* rbuf, size_t size) {
 
 // NVSHMEM allocation: ringbuf metadata + actual buffer
 
-single_ringbuf_t* single_ringbuf_malloc(size_t size) {
-  size_t alloc_size = sizeof(ringbuf_t) + size;
-  single_ringbuf_t* ringbuf_all = (single_ringbuf_t*)nvshmem_malloc(alloc_size);
+spsc_ringbuf_t* spsc_ringbuf_malloc(size_t size) {
+  size_t alloc_size = sizeof(spsc_ringbuf_t) + size;
+  spsc_ringbuf_t* ringbuf_all = (spsc_ringbuf_t*)nvshmem_malloc(alloc_size);
   assert(ringbuf_all);
   return ringbuf_all;
 }
 
-void single_ringbuf_free(single_ringbuf_t* rbuf) {
+void spsc_ringbuf_free(spsc_ringbuf_t* rbuf) {
   nvshmem_free(rbuf);
 }
 
-__device__ void single_ringbuf_init(single_ringbuf_t* rbuf, size_t size) {
+__device__ void spsc_ringbuf_init(spsc_ringbuf_t* rbuf, size_t size) {
   rbuf->space = size;
-  rbuf->ptr = (char*)rbuf + sizeof(ringbuf_t);
+  rbuf->ptr = (char*)rbuf + sizeof(spsc_ringbuf_t);
   rbuf->next = 0;
   rbuf->end = RBUF_OFF_MAX;
   rbuf->written = 0;
 }
 
-__device__ ringbuf_off_t single_ringbuf_acquire(single_ringbuf_t* rbuf, size_t size) {
+__device__ ringbuf_off_t spsc_ringbuf_acquire(spsc_ringbuf_t* rbuf, size_t size) {
   ringbuf_off_t seen, next, target, written;
 
   seen = rbuf->next;
@@ -270,10 +270,10 @@ __device__ ringbuf_off_t single_ringbuf_acquire(single_ringbuf_t* rbuf, size_t s
   return next;
 }
 
-__device__ void single_ringbuf_produce(single_ringbuf_t* rbuf) {
+__device__ void spsc_ringbuf_produce(spsc_ringbuf_t* rbuf) {
 }
 
-__device__ size_t single_ringbuf_consume(single_ringbuf_t* rbuf, size_t* offset) {
+__device__ size_t spsc_ringbuf_consume(spsc_ringbuf_t* rbuf, size_t* offset) {
   ringbuf_off_t written = rbuf->written, next, ready;
   size_t towrite;
 retry:
@@ -313,7 +313,7 @@ retry:
   return towrite;
 }
 
-__device__ void single_ringbuf_release(single_ringbuf_t* rbuf, size_t size) {
+__device__ void spsc_ringbuf_release(spsc_ringbuf_t* rbuf, size_t size) {
   const size_t written = rbuf->written + size;
 
   assert(rbuf->written <= rbuf->space);
