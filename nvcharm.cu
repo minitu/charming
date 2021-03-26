@@ -8,8 +8,6 @@
 #include "nvcharm.h"
 #include "ringbuf.h"
 
-#define DEBUG 0
-
 #define CHARE_TYPE_CNT_MAX 1024 // Maximum number of chare types
 
 /*
@@ -87,21 +85,33 @@ __device__ inline void send_reg_msg(int chare_id, int ep_id,
 
 __device__ inline ssize_t next_msg(void* addr, bool& term_flag) {
   Envelope* env = (Envelope*)addr;
+#ifdef DEBUG
   printf("PE %d received msg type %d size %llu from PE %d\n", nvshmem_my_pe(), env->type, env->size, env->src_pe);
+#endif
+
   if (env->type == MsgType::Create) {
+    // Creation message
     CreateMsg* create_msg = (CreateMsg*)((char*)env + sizeof(Envelope));
+#ifdef DEBUG
     printf("PE %d creation msg chare ID %d\n", nvshmem_my_pe(), create_msg->chare_id);
+#endif
     ChareType*& chare_type = chare_types[create_msg->chare_id];
     chare_type->alloc();
     chare_type->unpack((char*)create_msg + sizeof(CreateMsg));
   } else if (env->type == MsgType::Regular) {
+    // Regular message
     RegularMsg* reg_msg = (RegularMsg*)((char*)env + sizeof(Envelope));
+#ifdef DEBUG
     printf("PE %d regular msg chare ID %d EP ID %d\n", nvshmem_my_pe(), reg_msg->chare_id, reg_msg->ep_id);
+#endif
     // TODO: Chare ID needs to be fixed
     ChareType*& chare_type = chare_types[0];
     chare_type->call(reg_msg->ep_id);
   } else if (env->type == MsgType::Terminate) {
+    // Termination message
+#ifdef DEBUG
     printf("PE %d terminate msg\n", nvshmem_my_pe(), env->src_pe);
+#endif
     term_flag = true;
   }
 
