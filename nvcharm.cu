@@ -1,14 +1,13 @@
 #include <stdio.h>
 #include <cuda.h>
+#include <mpi.h>
 #include <nvshmem.h>
 #include <nvshmemx.h>
-#include <mpi.h>
 #include "nvcharm.h"
 #include "message.h"
 #include "scheduler.h"
 #include "ringbuf.h"
 #include "util.h"
-#include "user.h"
 
 #define CHARE_TYPE_CNT_MAX 1024 // Maximum number of chare types
 
@@ -71,42 +70,6 @@ int main(int argc, char* argv[]) {
   MPI_Finalize();
 
   return 0;
-}
-
-// TODO: Currently 1 chare per PE
-template <typename T>
-__device__ void Chare<T>::create(T& obj_) {
-  // Create one object for myself (PE 0)
-  alloc(obj_);
-
-  // Send creation messages to all other PEs
-  int my_pe = nvshmem_my_pe();
-  for (int pe = 0; pe < nvshmem_n_pes(); pe++) {
-    if (pe == my_pe) continue;
-
-    size_t payload_size = obj_.pack_size();
-    size_t msg_size = Envelope::alloc_size(sizeof(CreateMsg) + payload_size);
-    Envelope* env = create_envelope(MsgType::Create, msg_size);
-
-    CreateMsg* create_msg = new ((char*)env + sizeof(Envelope)) CreateMsg(id);
-    obj_.pack((char*)create_msg + sizeof(CreateMsg));
-
-    send_msg(env, msg_size, pe);
-  }
-}
-
-// TODO
-// - Change to send to chare instead of PE
-// - Support entry method parameters (single buffer for now)
-// Note: Chare should have been already created at this PE via a creation message
-template <typename T>
-__device__ void Chare<T>::invoke(int idx, int ep) {
-  if (idx == -1) {
-    // TODO: Broadcast to all chares
-  } else {
-    // Send a regular message to the target PE
-    send_reg_msg(idx, ep, 0, idx);
-  }
 }
 
 __device__ void ckExit() {
