@@ -10,7 +10,7 @@
 
 #define DEBUG 0
 
-#define CHARE_TYPE_CNT_MAX 1024 // Maximum number of chares
+#define CHARE_TYPE_CNT_MAX 1024 // Maximum number of chare types
 
 /*
 __device__ uint get_smid() {
@@ -37,7 +37,7 @@ __device__ size_t mbuf_size;
 
 __device__ ChareType* chare_types[CHARE_TYPE_CNT_MAX];
 
-__device__ inline Envelope* createEnvelope(MsgType type, size_t msg_size) {
+__device__ inline Envelope* create_envelope(MsgType type, size_t msg_size) {
   // Secure region in my message pool
   ringbuf_off_t mret = single_ringbuf_acquire(mbuf, msg_size);
   assert(mret != -1 && mret < mbuf_size);
@@ -48,7 +48,7 @@ __device__ inline Envelope* createEnvelope(MsgType type, size_t msg_size) {
   return env;
 }
 
-__device__ inline void sendMsg(Envelope* env, size_t msg_size, int dst_pe) {
+__device__ inline void send_msg(Envelope* env, size_t msg_size, int dst_pe) {
   single_ringbuf_produce(mbuf);
 
   // Secure region in destination PE's message queue
@@ -68,22 +68,22 @@ __device__ inline void sendMsg(Envelope* env, size_t msg_size, int dst_pe) {
   single_ringbuf_release(mbuf, len);
 }
 
-__device__ inline void sendTermMsg(int dst_pe) {
+__device__ inline void send_term_msg(int dst_pe) {
   size_t msg_size = Envelope::alloc_size(0);
-  Envelope* env = createEnvelope(MsgType::Terminate, msg_size);
+  Envelope* env = create_envelope(MsgType::Terminate, msg_size);
 
-  sendMsg(env, msg_size, dst_pe);
+  send_msg(env, msg_size, dst_pe);
 }
 
-__device__ inline void sendRegMsg(int chare_id, int ep_id,
+__device__ inline void send_reg_msg(int chare_id, int ep_id,
                                   size_t payload_size, int dst_pe) {
   size_t msg_size = Envelope::alloc_size(sizeof(RegularMsg) + payload_size);
-  Envelope* env = createEnvelope(MsgType::Regular, msg_size);
+  Envelope* env = create_envelope(MsgType::Regular, msg_size);
 
   RegularMsg* reg_msg = new ((char*)env + sizeof(Envelope)) RegularMsg(chare_id, ep_id);
   // TODO: Fill in payload
 
-  sendMsg(env, msg_size, dst_pe);
+  send_msg(env, msg_size, dst_pe);
 }
 
 __device__ inline ssize_t next_msg(void* addr, bool term_flags[]) {
@@ -95,10 +95,14 @@ __device__ inline ssize_t next_msg(void* addr, bool term_flags[]) {
     ChareType*& chare_type = chare_types[create_msg->chare_id];
     chare_type->alloc();
     chare_type->unpack((char*)create_msg + sizeof(CreateMsg));
-    term_flags[0] = true;
+    if (nvshmem_my_pe() != 2) term_flags[0] = true;
   } else if (env->type == MsgType::Regular) {
     RegularMsg* reg_msg = (RegularMsg*)((char*)env + sizeof(Envelope));
     printf("PE %d regular message chare ID %d EP ID %d\n", nvshmem_my_pe(), reg_msg->chare_id, reg_msg->ep_id);
+    // TODO: Chare ID needs to be fixed
+    ChareType*& chare_type = chare_types[0];
+    chare_type->call(reg_msg->ep_id);
+    term_flags[0] = true;
   } else if (env->type == MsgType::Terminate) {
     printf("PE %d terminate from PE %d\n", nvshmem_my_pe(), env->src_pe);
     term_flags[env->src_pe] = true;
@@ -155,8 +159,8 @@ __global__ void scheduler() {
     /*
     if (my_pe != 0) {
       int dst_pe = 0;
-      sendRegMsg(my_pe, 0, 128, dst_pe);
-      sendTermMsg(dst_pe);
+      send_reg_msg(my_pe, 0, 128, dst_pe);
+      send_term_msg(dst_pe);
     } else {
       // Receive messages and terminate
       bool* term_flags = (bool*)malloc(sizeof(bool) * n_pes);
@@ -246,32 +250,25 @@ __device__ void Chare<T>::create(T& obj_) {
 
     size_t payload_size = obj_.pack_size();
     size_t msg_size = Envelope::alloc_size(sizeof(CreateMsg) + payload_size);
-    Envelope* env = createEnvelope(MsgType::Create, msg_size);
+    Envelope* env = create_envelope(MsgType::Create, msg_size);
 
     CreateMsg* create_msg = new ((char*)env + sizeof(Envelope)) CreateMsg(id);
     obj_.pack((char*)create_msg + sizeof(CreateMsg));
 
-    sendMsg(env, msg_size, pe);
+    send_msg(env, msg_size, pe);
   }
 }
 
+// TODO
+// - Change to send to chare instead of PE
+// - Support entry method parameters (single buffer for now)
+// Note: Chare should have been already created at this PE via a creation message
 template <typename T>
-__device__ void Chare<T>::invoke(int ep, int idx) {
-  /*
+__device__ void Chare<T>::invoke(int idx, int ep) {
   if (idx == -1) {
-    // Broadcast to all chares
-    for (int i = 0; i < n_chares; i++) {
-      Message* msg = (Message*)malloc(sizeof(Message));
-      msg->ep = ep;
-      int target_sm = mapping[i];
-      send(target_sm, msg);
-    }
+    // TODO: Broadcast to all chares
   } else {
-    // P2P
-    Message* msg = (Message*)malloc(sizeof(Message));
-    msg->ep = ep;
-    int target_sm = mapping[idx];
-    send(target_sm, msg);
+    // Send a regular message to the target PE
+    send_reg_msg(idx, ep, 0, idx);
   }
-  */
 }

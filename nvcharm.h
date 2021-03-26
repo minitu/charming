@@ -43,7 +43,7 @@ struct Chare : ChareType {
 
   __device__ Chare(int id_) : ChareType(id_), obj(nullptr), entry_methods(nullptr) {}
   __device__ void create(C& obj_);
-  __device__ void invoke(int ep, int idx);
+  __device__ void invoke(int idx, int ep);
   __device__ void alloc(C& obj_) { obj = new C(obj_); }
   __device__ virtual void alloc() { obj = new C; }
   __device__ virtual void unpack(void* ptr) { obj->unpack(ptr); }
