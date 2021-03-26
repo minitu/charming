@@ -1,37 +1,41 @@
 #ifndef _MESSAGE_H_
 #define _MESSAGE_H_
 
-enum class MsgType {
-  Regular,
-  Create,
-  Terminate
+namespace charm {
+
+enum class msgtype {
+  regular,
+  create,
+  terminate
 };
 
-struct Envelope {
-  MsgType type;
+struct envelope {
+  msgtype type;
   size_t size;
   int src_pe;
 
-  __device__ Envelope(MsgType type_, size_t size_, int src_pe_)
+  __device__ envelope(msgtype type_, size_t size_, int src_pe_)
     : type(type_), size(size_), src_pe(src_pe_) {}
 
   inline static __device__ size_t alloc_size(size_t size_) {
-    return sizeof(Envelope) + size_;
+    return sizeof(envelope) + size_;
   }
 };
 
-struct RegularMsg {
+struct regular_msg {
   int chare_id;
   int ep_id;
 
-  __device__ RegularMsg(int chare_id_, int ep_id_)
+  __device__ regular_msg(int chare_id_, int ep_id_)
     : chare_id(chare_id_), ep_id(ep_id_) {}
 };
 
-struct CreateMsg {
+struct create_msg {
   int chare_id;
 
-  __device__ CreateMsg(int chare_id_) : chare_id(chare_id_) {}
+  __device__ create_msg(int chare_id_) : chare_id(chare_id_) {}
 };
+
+}
 
 #endif // _MESSAGE_H_

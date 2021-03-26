@@ -1,19 +1,19 @@
 #include <stdio.h>
 #include "user.h"
 
-__device__ void register_chare_types(ChareType** chare_types) {
+__device__ void charm::register_chare_types(charm::chare_type** chare_types) {
   // Register Foo and its entry methods
-  chare_types[0] = new Chare<Foo>(0);
-  EntryMethod**& foo_entry_methods = static_cast<Chare<Foo>*>(chare_types[0])->entry_methods;
-  foo_entry_methods = new EntryMethod*[2];
-  foo_entry_methods[0] = new EntryMethodImpl<Foo, void(Foo&)>(0, &Foo::hello);
-  foo_entry_methods[1] = new EntryMethodImpl<Foo, void(Foo&)>(1, &Foo::morning);
+  chare_types[0] = new charm::chare<Foo>(0);
+  charm::entry_method**& foo_entry_methods = static_cast<charm::chare<Foo>*>(chare_types[0])->entry_methods;
+  foo_entry_methods = new charm::entry_method*[2];
+  foo_entry_methods[0] = new charm::entry_method_impl<Foo, void(Foo&)>(0, &Foo::hello);
+  foo_entry_methods[1] = new charm::entry_method_impl<Foo, void(Foo&)>(1, &Foo::morning);
 
   // Register Bar and its entry methods
-  chare_types[1] = new Chare<Bar>(1);
-  EntryMethod**& bar_entry_methods = static_cast<Chare<Bar>*>(chare_types[1])->entry_methods;
-  bar_entry_methods = new EntryMethod*[2];
-  bar_entry_methods[0] = new EntryMethodImpl<Bar, void(Bar&)>(0, &Bar::hammer);
+  chare_types[1] = new charm::chare<Bar>(1);
+  charm::entry_method**& bar_entry_methods = static_cast<charm::chare<Bar>*>(chare_types[1])->entry_methods;
+  bar_entry_methods = new charm::entry_method*[2];
+  bar_entry_methods[0] = new charm::entry_method_impl<Bar, void(Bar&)>(0, &Bar::hammer);
 }
 
 // Foo
@@ -55,12 +55,12 @@ __device__ void Bar::unpack(void* ptr) {
 }
 
 // Main
-__device__ void charm_main(ChareType** chare_types) {
+__device__ void charm::main(charm::chare_type** chare_types) {
   // Create and populate object that will become a chare
   Foo my_obj(1);
 
   // Get a handle to the registered Foo chare
-  Chare<Foo>* my_chare = static_cast<Chare<Foo>*>(chare_types[0]);
+  charm::chare<Foo>* my_chare = static_cast<charm::chare<Foo>*>(chare_types[0]);
 
   // Create chares on all PEs (currently 1 per PE),
   // using the data in my object
@@ -70,5 +70,5 @@ __device__ void charm_main(ChareType** chare_types) {
   my_chare->invoke(2 /* Chare index (= PE for now) */, 0 /* Entry method index */);
 
   // Send termination messages to all PEs
-  ckExit();
+  charm::exit();
 }

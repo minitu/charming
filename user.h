@@ -28,7 +28,7 @@ struct Bar {
   __device__ void unpack(void* ptr);
 };
 
-template struct Chare<Foo>;
-template struct Chare<Bar>;
+template struct charm::chare<Foo>;
+template struct charm::chare<Bar>;
 
 #endif

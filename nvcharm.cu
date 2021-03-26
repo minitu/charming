@@ -16,7 +16,7 @@ __device__ size_t rbuf_size;
 __device__ spsc_ringbuf_t* mbuf;
 __device__ size_t mbuf_size;
 
-__device__ ChareType* chare_types[CHARE_TYPE_CNT_MAX];
+__device__ charm::chare_type* chare_types[CHARE_TYPE_CNT_MAX];
 
 int main(int argc, char* argv[]) {
   int rank;
@@ -54,7 +54,7 @@ int main(int argc, char* argv[]) {
   cudaMemcpyToSymbolAsync(rbuf_size, &h_rbuf_size, sizeof(size_t), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(mbuf, &h_mbuf, sizeof(spsc_ringbuf_t*), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(mbuf_size, &h_mbuf_size, sizeof(size_t), 0, cudaMemcpyHostToDevice, stream);
-  nvshmemx_collective_launch((const void*)scheduler, grid_size, block_size,
+  nvshmemx_collective_launch((const void*)charm::scheduler, grid_size, block_size,
       //scheduler_args, 0, stream);
       nullptr, 0, stream);
   cuda_check_error();
@@ -72,7 +72,7 @@ int main(int argc, char* argv[]) {
   return 0;
 }
 
-__device__ void ckExit() {
+__device__ void charm::exit() {
   int n_pes = nvshmem_n_pes();
   for (int pe = 0; pe < n_pes; pe++) {
     send_term_msg(pe);

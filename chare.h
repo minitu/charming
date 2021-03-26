@@ -5,37 +5,39 @@
 #include <nvfunctional>
 #include "scheduler.h"
 
-struct EntryMethod {
+namespace charm {
+
+struct entry_method {
   int idx; // FIXME: Needed?
 
-  __device__ EntryMethod(int idx_) : idx(idx_) {}
+  __device__ entry_method(int idx_) : idx(idx_) {}
   __device__ virtual void call(void* chare) const = 0;
 };
 
 template <typename C, typename T>
-struct EntryMethodImpl : EntryMethod {
+struct entry_method_impl : entry_method {
   nvstd::function<T> fn;
 
-  __device__ EntryMethodImpl(int idx, nvstd::function<T> fn_)
-    : EntryMethod(idx), fn(fn_) {}
+  __device__ entry_method_impl(int idx, nvstd::function<T> fn_)
+    : entry_method(idx), fn(fn_) {}
   __device__ virtual void call(void* chare) const { fn(*(C*)chare); }
 };
 
-struct ChareType {
+struct chare_type {
   int id; // FIXME: Needed?
 
-  __device__ ChareType(int id_) : id(id_) {}
+  __device__ chare_type(int id_) : id(id_) {}
   __device__ virtual void alloc() = 0;
   __device__ virtual void unpack(void* ptr) = 0;
   __device__ virtual void call(int ep) = 0;
 };
 
 template <typename C>
-struct Chare : ChareType {
+struct chare : chare_type {
   C* obj;
-  EntryMethod** entry_methods;
+  entry_method** entry_methods;
 
-  __device__ Chare(int id_) : ChareType(id_), obj(nullptr), entry_methods(nullptr) {}
+  __device__ chare(int id_) : chare_type(id_), obj(nullptr), entry_methods(nullptr) {}
   __device__ void alloc(C& obj_) { obj = new C(obj_); }
   __device__ virtual void alloc() { obj = new C; }
   __device__ virtual void unpack(void* ptr) { obj->unpack(ptr); }
@@ -52,11 +54,11 @@ struct Chare : ChareType {
       if (pe == my_pe) continue;
 
       size_t payload_size = obj_.pack_size();
-      size_t msg_size = Envelope::alloc_size(sizeof(CreateMsg) + payload_size);
-      Envelope* env = create_envelope(MsgType::Create, msg_size);
+      size_t msg_size = envelope::alloc_size(sizeof(create_msg) + payload_size);
+      envelope* env = create_envelope(msgtype::create, msg_size);
 
-      CreateMsg* create_msg = new ((char*)env + sizeof(Envelope)) CreateMsg(id);
-      obj_.pack((char*)create_msg + sizeof(CreateMsg));
+      create_msg* msg = new ((char*)env + sizeof(envelope)) create_msg(id);
+      obj_.pack((char*)msg + sizeof(create_msg));
 
       send_msg(env, msg_size, pe);
     }
@@ -75,5 +77,7 @@ struct Chare : ChareType {
     }
   }
 };
+
+}
 
 #endif // _CHARE_H_

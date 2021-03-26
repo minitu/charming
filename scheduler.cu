@@ -3,25 +3,27 @@
 #include "chare.h"
 #include "ringbuf.h"
 
+using namespace charm;
+
 extern __device__ mpsc_ringbuf_t* rbuf;
 extern __device__ size_t rbuf_size;
 extern __device__ spsc_ringbuf_t* mbuf;
 extern __device__ size_t mbuf_size;
 
-extern __device__ ChareType* chare_types[];
+extern __device__ chare_type* chare_types[];
 
-__device__ Envelope* create_envelope(MsgType type, size_t msg_size) {
+__device__ envelope* charm::create_envelope(msgtype type, size_t msg_size) {
   // Secure region in my message pool
   ringbuf_off_t mret = spsc_ringbuf_acquire(mbuf, msg_size);
   assert(mret != -1 && mret < mbuf_size);
 
   // Create envelope
-  Envelope* env = new (mbuf->addr(mret)) Envelope(type, msg_size, nvshmem_my_pe());
+  envelope* env = new (mbuf->addr(mret)) envelope(type, msg_size, nvshmem_my_pe());
 
   return env;
 }
 
-__device__ void send_msg(Envelope* env, size_t msg_size, int dst_pe) {
+__device__ void charm::send_msg(envelope* env, size_t msg_size, int dst_pe) {
   spsc_ringbuf_produce(mbuf);
 
   // Secure region in destination PE's message queue
@@ -40,49 +42,49 @@ __device__ void send_msg(Envelope* env, size_t msg_size, int dst_pe) {
   spsc_ringbuf_release(mbuf, len);
 }
 
-__device__ void send_term_msg(int dst_pe) {
-  size_t msg_size = Envelope::alloc_size(0);
-  Envelope* env = create_envelope(MsgType::Terminate, msg_size);
+__device__ void charm::send_term_msg(int dst_pe) {
+  size_t msg_size = envelope::alloc_size(0);
+  envelope* env = create_envelope(msgtype::terminate, msg_size);
 
   send_msg(env, msg_size, dst_pe);
 }
 
-__device__ void send_reg_msg(int chare_id, int ep_id,
+__device__ void charm::send_reg_msg(int chare_id, int ep_id,
                              size_t payload_size, int dst_pe) {
-  size_t msg_size = Envelope::alloc_size(sizeof(RegularMsg) + payload_size);
-  Envelope* env = create_envelope(MsgType::Regular, msg_size);
+  size_t msg_size = envelope::alloc_size(sizeof(charm::regular_msg) + payload_size);
+  envelope* env = create_envelope(msgtype::regular, msg_size);
 
-  RegularMsg* reg_msg = new ((char*)env + sizeof(Envelope)) RegularMsg(chare_id, ep_id);
+  charm::regular_msg* msg = new ((char*)env + sizeof(envelope)) charm::regular_msg(chare_id, ep_id);
   // TODO: Fill in payload
 
   send_msg(env, msg_size, dst_pe);
 }
 
 __device__ __forceinline__ ssize_t next_msg(void* addr, bool& term_flag) {
-  Envelope* env = (Envelope*)addr;
+  envelope* env = (envelope*)addr;
 #ifdef DEBUG
   printf("PE %d received msg type %d size %llu from PE %d\n", nvshmem_my_pe(), env->type, env->size, env->src_pe);
 #endif
 
-  if (env->type == MsgType::Create) {
+  if (env->type == msgtype::create) {
     // Creation message
-    CreateMsg* create_msg = (CreateMsg*)((char*)env + sizeof(Envelope));
+    charm::create_msg* msg = (charm::create_msg*)((char*)env + sizeof(envelope));
 #ifdef DEBUG
-    printf("PE %d creation msg chare ID %d\n", nvshmem_my_pe(), create_msg->chare_id);
+    printf("PE %d creation msg chare ID %d\n", nvshmem_my_pe(), msg->chare_id);
 #endif
-    ChareType*& chare_type = chare_types[create_msg->chare_id];
+    charm::chare_type*& chare_type = chare_types[msg->chare_id];
     chare_type->alloc();
-    chare_type->unpack((char*)create_msg + sizeof(CreateMsg));
-  } else if (env->type == MsgType::Regular) {
+    chare_type->unpack((char*)msg + sizeof(charm::create_msg));
+  } else if (env->type == msgtype::regular) {
     // Regular message
-    RegularMsg* reg_msg = (RegularMsg*)((char*)env + sizeof(Envelope));
+    charm::regular_msg* msg = (charm::regular_msg*)((char*)env + sizeof(envelope));
 #ifdef DEBUG
-    printf("PE %d regular msg chare ID %d EP ID %d\n", nvshmem_my_pe(), reg_msg->chare_id, reg_msg->ep_id);
+    printf("PE %d regular msg chare ID %d EP ID %d\n", nvshmem_my_pe(), msg->chare_id, msg->ep_id);
 #endif
     // TODO: Chare ID needs to be fixed
-    ChareType*& chare_type = chare_types[0];
-    chare_type->call(reg_msg->ep_id);
-  } else if (env->type == MsgType::Terminate) {
+    charm::chare_type*& chare_type = chare_types[0];
+    chare_type->call(msg->ep_id);
+  } else if (env->type == msgtype::terminate) {
     // Termination message
 #ifdef DEBUG
     printf("PE %d terminate msg\n", nvshmem_my_pe(), env->src_pe);
@@ -108,7 +110,7 @@ __device__ __forceinline__ void recv(bool &term_flag) {
   }
 }
 
-__global__ void scheduler() {
+__global__ void charm::scheduler() {
   if (!blockIdx.x && !threadIdx.x) {
     bool term_flag = false;
     int my_pe = nvshmem_my_pe();
@@ -125,7 +127,7 @@ __global__ void scheduler() {
 
     if (my_pe == 0) {
       // Execute user's main function
-      charm_main(chare_types);
+      main(chare_types);
     }
 
     nvshmem_barrier_all();
@@ -136,4 +138,3 @@ __global__ void scheduler() {
     } while(!term_flag);
   }
 }
-

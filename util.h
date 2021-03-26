@@ -1,6 +1,14 @@
 #ifndef _UTIL_H_
 #define _UTIL_H_
 
+#define cuda_check_error() {                                                         \
+  cudaError_t e = cudaGetLastError();                                                \
+  if (cudaSuccess != e) {                                                            \
+    printf("CUDA failure %s:%d: '%s'\n", __FILE__, __LINE__, cudaGetErrorString(e)); \
+    exit(-1);                                                                        \
+  }                                                                                  \
+}
+
 using clock_value_t = long long;
 
 __device__ uint get_smid();
