@@ -54,4 +54,7 @@ struct Chare : ChareType {
 __device__ void register_chare_types(ChareType** chare_types);
 __device__ void charm_main(ChareType** chare_types);
 
+// Runtime functions that can be called by the user
+__device__ void ckExit();
+
 #endif

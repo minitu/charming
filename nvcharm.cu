@@ -55,7 +55,6 @@ __device__ inline void send_msg(Envelope* env, size_t msg_size, int dst_pe) {
   ringbuf_off_t rret;
   while ((rret = ringbuf_acquire(rbuf, msg_size, dst_pe)) == -1) {}
   assert(rret < rbuf_size);
-  printf("PE %d: acquired %llu, msg size %llu\n", nvshmem_my_pe(), rret, msg_size);
 
   // Send message
   nvshmem_char_put((char*)rbuf->addr(rret), (char*)env, env->size, dst_pe);
@@ -86,40 +85,37 @@ __device__ inline void send_reg_msg(int chare_id, int ep_id,
   send_msg(env, msg_size, dst_pe);
 }
 
-__device__ inline ssize_t next_msg(void* addr, bool term_flags[]) {
+__device__ inline ssize_t next_msg(void* addr, bool& term_flag) {
   Envelope* env = (Envelope*)addr;
-  printf("PE %d received msg type %d size %llu src PE %d\n", nvshmem_my_pe(), env->type, env->size, env->src_pe);
+  printf("PE %d received msg type %d size %llu from PE %d\n", nvshmem_my_pe(), env->type, env->size, env->src_pe);
   if (env->type == MsgType::Create) {
     CreateMsg* create_msg = (CreateMsg*)((char*)env + sizeof(Envelope));
-    printf("PE %d creation message chare ID %d\n", nvshmem_my_pe(), create_msg->chare_id);
+    printf("PE %d creation msg chare ID %d\n", nvshmem_my_pe(), create_msg->chare_id);
     ChareType*& chare_type = chare_types[create_msg->chare_id];
     chare_type->alloc();
     chare_type->unpack((char*)create_msg + sizeof(CreateMsg));
-    if (nvshmem_my_pe() != 2) term_flags[0] = true;
   } else if (env->type == MsgType::Regular) {
     RegularMsg* reg_msg = (RegularMsg*)((char*)env + sizeof(Envelope));
-    printf("PE %d regular message chare ID %d EP ID %d\n", nvshmem_my_pe(), reg_msg->chare_id, reg_msg->ep_id);
+    printf("PE %d regular msg chare ID %d EP ID %d\n", nvshmem_my_pe(), reg_msg->chare_id, reg_msg->ep_id);
     // TODO: Chare ID needs to be fixed
     ChareType*& chare_type = chare_types[0];
     chare_type->call(reg_msg->ep_id);
-    term_flags[0] = true;
   } else if (env->type == MsgType::Terminate) {
-    printf("PE %d terminate from PE %d\n", nvshmem_my_pe(), env->src_pe);
-    term_flags[env->src_pe] = true;
+    printf("PE %d terminate msg\n", nvshmem_my_pe(), env->src_pe);
+    term_flag = true;
   }
 
   return env->size;
 }
 
-__device__ inline void recv(bool term_flags[]) {
+__device__ inline void recv(bool &term_flag) {
   size_t len, off;
   if ((len = ringbuf_consume(rbuf, &off)) != 0) {
     // Retrieved a contiguous range, there could be multiple messages
     size_t rem = len;
     ssize_t ret;
     while (rem) {
-      printf("PE %d, next msg at offset %llu\n", nvshmem_my_pe(), off);
-      ret = next_msg(rbuf->addr(off), term_flags);
+      ret = next_msg(rbuf->addr(off), term_flag);
       off += ret;
       rem -= ret;
     }
@@ -127,15 +123,9 @@ __device__ inline void recv(bool term_flags[]) {
   }
 }
 
-__device__ bool check_terminate(bool flags[], int cnt) {
-  for (int i = 0; i < cnt; i++) {
-    if (!flags[i]) return false;
-  }
-  return true;
-}
-
 __global__ void scheduler() {
   if (!blockIdx.x && !threadIdx.x) {
+    bool term_flag = false;
     int my_pe = nvshmem_my_pe();
     int n_pes = nvshmem_n_pes();
 
@@ -155,31 +145,10 @@ __global__ void scheduler() {
 
     nvshmem_barrier_all();
 
-    // XXX: Testing
-    /*
-    if (my_pe != 0) {
-      int dst_pe = 0;
-      send_reg_msg(my_pe, 0, 128, dst_pe);
-      send_term_msg(dst_pe);
-    } else {
-      // Receive messages and terminate
-      bool* term_flags = (bool*)malloc(sizeof(bool) * n_pes);
-      for (int i = 0; i < n_pes; i++) {
-        term_flags[i] = false;
-      }
-      term_flags[my_pe] = true;
-      do {
-        recv(term_flags);
-      } while(!check_terminate(term_flags, n_pes));
-    }
-    */
-    if (my_pe != 0) {
-      // Receive messages and terminate
-      bool term_flags = false;
-      do {
-        recv(&term_flags);
-      } while(!check_terminate(&term_flags, 1));
-    }
+    // Receive messages and terminate
+    do {
+      recv(term_flag);
+    } while(!term_flag);
   }
 }
 
@@ -270,5 +239,12 @@ __device__ void Chare<T>::invoke(int idx, int ep) {
   } else {
     // Send a regular message to the target PE
     send_reg_msg(idx, ep, 0, idx);
+  }
+}
+
+__device__ void ckExit() {
+  int n_pes = nvshmem_n_pes();
+  for (int pe = 0; pe < n_pes; pe++) {
+    send_term_msg(pe);
   }
 }

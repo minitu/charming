@@ -31,12 +31,10 @@ __device__ size_t Foo::pack_size() {
 
 __device__ void Foo::pack(void* ptr) {
   *(int*)ptr = i;
-  printf("Foo packed %d at ptr %p\n", *(int*)ptr, ptr);
 }
 
 __device__ void Foo::unpack(void* ptr) {
   i = *(int*)ptr;
-  printf("Foo unpacked %d from ptr %p\n", i, ptr);
 }
 
 // Bar
@@ -70,4 +68,7 @@ __device__ void charm_main(ChareType** chare_types) {
 
   // Invoke an entry method on a remote PE
   my_chare->invoke(2 /* Chare index (= PE for now) */, 0 /* Entry method index */);
+
+  // Send termination messages to all PEs
+  ckExit();
 }
