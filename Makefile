@@ -4,7 +4,7 @@ NVCC_OPTS = -arch=sm_70 -I$(NVSHMEM_HOME)/include -I$(MPI_ROOT)/include -DDEBUG
 NVCC_LINK = nvcc -ccbin=mpicxx $(NVCC_OPTS) -L$(NVSHMEM_HOME)/lib -lnvshmem -L$(MPI_ROOT)/lib -lmpi_ibm -lcuda -lcudart
 NVCC = nvcc --std=c++11 -dc $(NVCC_OPTS)
 
-HEADERS = $(TARGET).h message.h ringbuf.h util.h user.h
+HEADERS = $(TARGET).h message.h scheduler.h ringbuf.h util.h user.h
 OBJS = $(TARGET).o ringbuf.o util.o user.o
 
 $(TARGET): $(OBJS)
