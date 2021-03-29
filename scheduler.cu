@@ -87,7 +87,7 @@ __device__ __forceinline__ ssize_t next_msg(void* addr, bool& term_flag) {
   } else if (env->type == msgtype::terminate) {
     // Termination message
 #ifdef DEBUG
-    printf("PE %d terminate msg\n", nvshmem_my_pe(), env->src_pe);
+    printf("PE %d terminate msg\n", nvshmem_my_pe());
 #endif
     term_flag = true;
   }
