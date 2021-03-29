@@ -95,7 +95,7 @@ __device__ __forceinline__ ssize_t next_msg(void* addr, bool& term_flag) {
   return env->size;
 }
 
-__device__ __forceinline__ void recv(bool &term_flag) {
+__device__ __forceinline__ void recv_msg(bool &term_flag) {
   size_t len, off;
   if ((len = mpsc_ringbuf_consume(rbuf, &off)) != 0) {
     // Retrieved a contiguous range, there could be multiple messages
@@ -134,7 +134,7 @@ __global__ void charm::scheduler() {
 
     // Receive messages and terminate
     do {
-      recv(term_flag);
+      recv_msg(term_flag);
     } while(!term_flag);
   }
 }
