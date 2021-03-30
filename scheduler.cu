@@ -32,7 +32,6 @@ __device__ void charm::send_msg(envelope* env, size_t msg_size, int dst_pe) {
   assert(rret < rbuf_size);
 
   // Send message
-  printf("acquired %lld, sending to PE %d rbuf->addr(rret): %p, msg size %lld\n", rret, dst_pe, rbuf->addr(rret), env->size);
   nvshmem_char_put((char*)rbuf->addr(rret), (char*)env, env->size, dst_pe);
   nvshmem_quiet();
   mpsc_ringbuf_produce(rbuf, dst_pe);
@@ -73,11 +72,12 @@ __device__ __forceinline__ ssize_t next_msg(void* addr, bool& term_flag) {
     // Creation message
     charm::create_msg* msg = (charm::create_msg*)((char*)env + sizeof(envelope));
 #ifdef DEBUG
-    printf("PE %d creation msg chare ID %d, start idx %d, end idx %d\n",
-           nvshmem_my_pe(), msg->chare_id, msg->start_idx, msg->end_idx);
+    printf("PE %d creation msg chare ID %d, n_chares %d, start idx %d, end idx %d\n",
+           nvshmem_my_pe(), msg->chare_id, msg->n_chares, msg->start_idx, msg->end_idx);
 #endif
     charm::chare_type*& chare_type = chare_types[msg->chare_id];
     chare_type->alloc(msg->n_chares);
+    chare_type->set_indices(msg->start_idx, msg->end_idx);
     void* packed_data = (char*)msg + sizeof(charm::create_msg);
     for (int i = 0; i < msg->n_chares; i++) {
       chare_type->unpack(packed_data, i);

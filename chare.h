@@ -28,6 +28,7 @@ struct chare_type {
 
   __device__ chare_type(int id_) : id(id_) {}
   __device__ virtual void alloc(int count) = 0;
+  __device__ virtual void set_indices(int start_idx_, int end_idx_) = 0;
   __device__ virtual void unpack(void* ptr, int idx) = 0;
   __device__ virtual void call(int idx, int ep) = 0;
 };
@@ -40,14 +41,27 @@ struct chare : chare_type {
   entry_method** entry_methods;
 
   __device__ chare(int id_)
-    : chare_type(id_), objects(nullptr), start_idx(-1), end_idx(-1), entry_methods(nullptr) {}
+    : chare_type(id_), objects(nullptr), start_idx(-1),
+      end_idx(-1), entry_methods(nullptr) {}
+
   __device__ virtual void alloc(int count) { objects = new C*[count]; }
+
+  __device__ virtual void set_indices(int start_idx_, int end_idx_) {
+    start_idx = start_idx_;
+    end_idx = end_idx_;
+  }
+
   __device__ void set(C& obj, int idx) { objects[idx] = new C(obj); }
+
   __device__ virtual void unpack(void* ptr, int idx) {
     objects[idx] = new C;
     objects[idx]->unpack(ptr);
   }
-  __device__ virtual void call(int idx, int ep) { entry_methods[ep]->call(objects[idx]); }
+
+  __device__ virtual void call(int idx, int ep) {
+    assert(idx >= start_idx && idx <= end_idx);
+    entry_methods[ep]->call(objects[idx - start_idx]);
+  }
 
   __device__ void create(C& obj, int n) {
     // Divide the chares across all PEs
