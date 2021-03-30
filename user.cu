@@ -56,18 +56,17 @@ __device__ void Bar::unpack(void* ptr) {
 
 // Main
 __device__ void charm::main(charm::chare_type** chare_types) {
-  // Create and populate object that will become a chare
+  // Create and populate object that will become the basis of chares
   Foo my_obj(1);
 
   // Get a handle to the registered Foo chare
   charm::chare<Foo>* my_chare = static_cast<charm::chare<Foo>*>(chare_types[0]);
 
-  // Create chares on all PEs (currently 1 per PE),
-  // using the data in my object
-  my_chare->create(my_obj);
+  // Create chares using the data in my object
+  my_chare->create(my_obj, 8);
 
-  // Invoke an entry method on a remote PE
-  my_chare->invoke(2 /* Chare index (= PE for now) */, 0 /* Entry method index */);
+  // Invoke an entry method
+  my_chare->invoke(2 /* Chare index */, 0 /* Entry method index */);
 
   // Send termination messages to all PEs
   charm::exit();

@@ -37,7 +37,7 @@ int main(int argc, char* argv[]) {
   cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
 
   // Allocate message queue with NVSHMEM
-  size_t h_rbuf_size = (1 << 10);
+  size_t h_rbuf_size = (1 << 28);
   mpsc_ringbuf_t* h_rbuf = mpsc_ringbuf_malloc(h_rbuf_size);
   size_t h_mbuf_size = (1 << 28);
   spsc_ringbuf_t* h_mbuf = spsc_ringbuf_malloc(h_mbuf_size);
@@ -46,8 +46,12 @@ int main(int argc, char* argv[]) {
   // Launch scheduler
   int grid_size = (argc > 1) ? atoi(argv[1]) : 1;
   int block_size = (argc > 2) ? atoi(argv[2]) : 1;
+  //cudaDeviceSetLimit(cudaLimitStackSize, 16384);
+  size_t stack_size;
+  cudaDeviceGetLimit(&stack_size, cudaLimitStackSize);
   if (!rank) {
-    printf("NVCHARM\nGrid size: %d\nBlock size: %d\n", grid_size, block_size);
+    printf("NVCHARM\nGrid size: %d\nBlock size: %d\nStack size: %llu\n",
+           grid_size, block_size, stack_size);
   }
   //void* scheduler_args[4] = { &rbuf, &rbuf_size, &mbuf, &mbuf_size };
   cudaMemcpyToSymbolAsync(rbuf, &h_rbuf, sizeof(mpsc_ringbuf_t*), 0, cudaMemcpyHostToDevice, stream);

@@ -24,43 +24,74 @@ struct entry_method_impl : entry_method {
 };
 
 struct chare_type {
-  int id; // FIXME: Needed?
+  int id;
 
   __device__ chare_type(int id_) : id(id_) {}
-  __device__ virtual void alloc() = 0;
-  __device__ virtual void unpack(void* ptr) = 0;
-  __device__ virtual void call(int ep) = 0;
+  __device__ virtual void alloc(int count) = 0;
+  __device__ virtual void unpack(void* ptr, int idx) = 0;
+  __device__ virtual void call(int idx, int ep) = 0;
 };
 
 template <typename C>
 struct chare : chare_type {
-  C* obj;
+  C** objects;
+  int start_idx;
+  int end_idx;
   entry_method** entry_methods;
 
-  __device__ chare(int id_) : chare_type(id_), obj(nullptr), entry_methods(nullptr) {}
-  __device__ void alloc(C& obj_) { obj = new C(obj_); }
-  __device__ virtual void alloc() { obj = new C; }
-  __device__ virtual void unpack(void* ptr) { obj->unpack(ptr); }
-  __device__ virtual void call(int ep) { entry_methods[ep]->call(obj); }
+  __device__ chare(int id_)
+    : chare_type(id_), objects(nullptr), start_idx(-1), end_idx(-1), entry_methods(nullptr) {}
+  __device__ virtual void alloc(int count) { objects = new C*[count]; }
+  __device__ void set(C& obj, int idx) { objects[idx] = new C(obj); }
+  __device__ virtual void unpack(void* ptr, int idx) {
+    objects[idx] = new C;
+    objects[idx]->unpack(ptr);
+  }
+  __device__ virtual void call(int idx, int ep) { entry_methods[ep]->call(objects[idx]); }
 
-  // TODO: Currently 1 chare per PE
-  __device__ void create(C& obj_) {
-    // Create one object for myself (PE 0)
-    alloc(obj_);
-
-    // Send creation messages to all other PEs
+  __device__ void create(C& obj, int n) {
+    // Divide the chares across all PEs
+    int n_pes = nvshmem_n_pes();
     int my_pe = nvshmem_my_pe();
-    for (int pe = 0; pe < nvshmem_n_pes(); pe++) {
-      if (pe == my_pe) continue;
+    int n_per_pe = n / n_pes;
+    int rem = n % n_pes;
 
-      size_t payload_size = obj_.pack_size();
-      size_t msg_size = envelope::alloc_size(sizeof(create_msg) + payload_size);
-      envelope* env = create_envelope(msgtype::create, msg_size);
+    // Create chares
+    // TODO: Currently block mapping
+    int n_this = -1;
+    int start_idx_ = 0;
+    int end_idx_ = 0;
+    for (int pe = 0; pe < n_pes; pe++) {
+      // Figure out number of chares for this PE
+      n_this = n_per_pe;
+      if (pe < rem) n_this++;
 
-      create_msg* msg = new ((char*)env + sizeof(envelope)) create_msg(id);
-      obj_.pack((char*)msg + sizeof(create_msg));
+      // Update end chare index
+      end_idx_ = start_idx_ + n_this - 1;
 
-      send_msg(env, msg_size, pe);
+      // Create chares for this PE
+      if (pe == my_pe) {
+        alloc(n_this);
+        for (int i = 0; i < n_this; i++) {
+          set(obj, i);
+        }
+
+        // Store chare index range
+        start_idx = start_idx_;
+        end_idx = end_idx_;
+      } else {
+        // Send creation messages to all other PEs
+        size_t payload_size = obj.pack_size();
+        size_t msg_size = envelope::alloc_size(sizeof(create_msg) + payload_size);
+        envelope* env = create_envelope(msgtype::create, msg_size);
+        create_msg* msg = new ((char*)env + sizeof(envelope)) create_msg(id, n_this, start_idx_, end_idx_);
+        obj.pack((char*)msg + sizeof(create_msg));
+
+        send_msg(env, msg_size, pe);
+      }
+
+      // Update start chare index
+      start_idx_ += n_this;
     }
   }
 
@@ -73,7 +104,8 @@ struct chare : chare_type {
       // TODO: Broadcast to all chares
     } else {
       // Send a regular message to the target PE
-      send_reg_msg(idx, ep, 0, idx);
+      // TODO: Need to figure out which PE to send it to
+      send_reg_msg(id, idx, ep, 0, idx);
     }
   }
 };
