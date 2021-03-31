@@ -58,9 +58,12 @@ int main(int argc, char* argv[]) {
   cudaMemcpyToSymbolAsync(rbuf_size, &h_rbuf_size, sizeof(size_t), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(mbuf, &h_mbuf, sizeof(spsc_ringbuf_t*), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(mbuf_size, &h_mbuf_size, sizeof(size_t), 0, cudaMemcpyHostToDevice, stream);
+  /* TODO: This doesn't support CUDA dynamic parallelism, will it be a problem?
   nvshmemx_collective_launch((const void*)charm::scheduler, grid_size, block_size,
       //scheduler_args, 0, stream);
       nullptr, 0, stream);
+      */
+  charm::scheduler<<<grid_size, block_size, 0, stream>>>();
   cuda_check_error();
   cudaStreamSynchronize(stream);
   //nvshmemx_barrier_all_on_stream(stream); // Hangs

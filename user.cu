@@ -16,9 +16,27 @@ __device__ void charm::register_chare_types(charm::chare_type** chare_types) {
   bar_entry_methods[0] = new charm::entry_method_impl<Bar, void(Bar&)>(0, &Bar::hammer);
 }
 
+__global__ void my_kernel() {
+  int a = blockIdx.x * blockDim.x + threadIdx.x;
+
+  for (int i = 0; i < 1e6; i++) {
+    a = a * (i + 13) % 7;
+  }
+
+  if (blockIdx.x == 0 && threadIdx.x % 16 == 0) {
+    printf("my_kernel, block %d, thread %d\n", blockIdx.x, threadIdx.x);
+  }
+}
+
 // Foo
 __device__ void Foo::hello() {
   printf("Hello! My int is %d\n", i);
+
+  /* Testing CUDA dynamic parallelism
+  dim3 grid_size(1024);
+  dim3 block_size(256);
+  my_kernel<<<grid_size, block_size>>>();
+  */
 }
 
 __device__ void Foo::morning() {
