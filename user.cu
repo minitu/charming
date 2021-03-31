@@ -74,6 +74,7 @@ __device__ void Bar::unpack(void* ptr) {
 
 // Main
 __device__ void charm::main(charm::chare_type** chare_types) {
+#if 0
   // Create and populate object that will become the basis of chares
   Foo my_obj(1);
 
@@ -85,6 +86,14 @@ __device__ void charm::main(charm::chare_type** chare_types) {
 
   // Invoke an entry method
   my_chare->invoke(2 /* Chare index */, 0 /* Entry method index */);
+#endif
+
+  long long start = clock64();
+  for (int i = 0; i < DUMMY_ITERS; i++) {
+    charm::send_dummy_msg(0);
+  }
+  long long end = clock64();
+  printf("Send avg clocks: %lld\n", (end - start) / DUMMY_ITERS);
 
   // Send termination messages to all PEs
   charm::exit();

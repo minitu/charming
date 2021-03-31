@@ -49,9 +49,11 @@ int main(int argc, char* argv[]) {
   //cudaDeviceSetLimit(cudaLimitStackSize, 16384);
   size_t stack_size;
   cudaDeviceGetLimit(&stack_size, cudaLimitStackSize);
+  cudaDeviceProp prop;
+  cudaGetDeviceProperties(&prop, 0);
   if (!rank) {
-    printf("NVCHARM\nGrid size: %d\nBlock size: %d\nStack size: %llu\n",
-           grid_size, block_size, stack_size);
+    printf("NVCHARM\nGrid size: %d\nBlock size: %d\nStack size: %llu\nClock rate: %.2lf GHz\n",
+           grid_size, block_size, stack_size, (double)prop.clockRate / 1e6);
   }
   //void* scheduler_args[4] = { &rbuf, &rbuf_size, &mbuf, &mbuf_size };
   cudaMemcpyToSymbolAsync(rbuf, &h_rbuf, sizeof(mpsc_ringbuf_t*), 0, cudaMemcpyHostToDevice, stream);

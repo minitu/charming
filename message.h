@@ -8,6 +8,7 @@
 namespace charm {
 
 enum class msgtype {
+  dummy,
   regular,
   create,
   terminate

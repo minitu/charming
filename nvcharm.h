@@ -3,6 +3,8 @@
 
 #include "chare.h"
 
+#define DUMMY_ITERS 100000
+
 namespace charm {
 
 // User functions required by the runtime

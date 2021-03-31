@@ -2,6 +2,7 @@
 #include "nvcharm.h"
 #include "chare.h"
 #include "ringbuf.h"
+#include "util.h"
 
 using namespace charm;
 
@@ -42,6 +43,13 @@ __device__ void charm::send_msg(envelope* env, size_t msg_size, int dst_pe) {
   spsc_ringbuf_release(mbuf, len);
 }
 
+__device__ void charm::send_dummy_msg(int dst_pe) {
+  size_t msg_size = envelope::alloc_size(0);
+  envelope* env = create_envelope(msgtype::dummy, msg_size);
+
+  send_msg(env, msg_size, dst_pe);
+}
+
 __device__ void charm::send_reg_msg(int chare_id, int chare_idx, int ep_id,
                                     size_t payload_size, int dst_pe) {
   size_t msg_size = envelope::alloc_size(sizeof(charm::regular_msg) + payload_size);
@@ -62,13 +70,28 @@ __device__ void charm::send_term_msg(int dst_pe) {
 }
 
 __device__ __forceinline__ ssize_t next_msg(void* addr, bool& term_flag) {
+  static int dummy_cnt = 0;
+  static clock_value_t start;
+  static clock_value_t end;
   envelope* env = (envelope*)addr;
 #ifdef DEBUG
+  /*
   printf("PE %d received msg type %d size %llu from PE %d\n",
          nvshmem_my_pe(), env->type, env->size, env->src_pe);
+         */
 #endif
 
-  if (env->type == msgtype::create) {
+  if (env->type == msgtype::dummy) {
+    // Dummy message
+    //printf("PE %d dummy msg\n", nvshmem_my_pe());
+    if (dummy_cnt == 0) {
+      start = clock64();
+    } else if (dummy_cnt == DUMMY_ITERS-1) {
+      end = clock64();
+      printf("Receive avg clocks: %lld\n", (end - start) / DUMMY_ITERS);
+    }
+    dummy_cnt++;
+  } else if (env->type == msgtype::create) {
     // Creation message
     charm::create_msg* msg = (charm::create_msg*)((char*)env + sizeof(envelope));
 #ifdef DEBUG
