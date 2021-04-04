@@ -6,41 +6,24 @@ __device__ void charm::register_chare_types(charm::chare_type** chare_types) {
   chare_types[0] = new charm::chare<Foo>(0);
   charm::entry_method**& foo_entry_methods = static_cast<charm::chare<Foo>*>(chare_types[0])->entry_methods;
   foo_entry_methods = new charm::entry_method*[2];
-  foo_entry_methods[0] = new charm::entry_method_impl<Foo, void(Foo&)>(0, &Foo::hello);
-  foo_entry_methods[1] = new charm::entry_method_impl<Foo, void(Foo&)>(1, &Foo::morning);
+  foo_entry_methods[0] = new charm::entry_method_impl<Foo>(0, &Foo::hello);
+  foo_entry_methods[1] = new charm::entry_method_impl<Foo>(1, &Foo::morning);
 
   // Register Bar and its entry methods
   chare_types[1] = new charm::chare<Bar>(1);
   charm::entry_method**& bar_entry_methods = static_cast<charm::chare<Bar>*>(chare_types[1])->entry_methods;
-  bar_entry_methods = new charm::entry_method*[2];
-  bar_entry_methods[0] = new charm::entry_method_impl<Bar, void(Bar&)>(0, &Bar::hammer);
-}
-
-__global__ void my_kernel() {
-  int a = blockIdx.x * blockDim.x + threadIdx.x;
-
-  for (int i = 0; i < 1e6; i++) {
-    a = a * (i + 13) % 7;
-  }
-
-  if (blockIdx.x == 0 && threadIdx.x % 16 == 0) {
-    printf("my_kernel, block %d, thread %d\n", blockIdx.x, threadIdx.x);
-  }
+  bar_entry_methods = new charm::entry_method*[1];
+  bar_entry_methods[0] = new charm::entry_method_impl<Bar>(0, &Bar::hammer);
 }
 
 // Foo
-__device__ void Foo::hello() {
+__device__ void Foo::hello(void* arg) {
   printf("Hello! My int is %d\n", i);
-
-  /* Testing CUDA dynamic parallelism
-  dim3 grid_size(1024);
-  dim3 block_size(256);
-  my_kernel<<<grid_size, block_size>>>();
-  */
 }
 
-__device__ void Foo::morning() {
-  printf("Good morning!\n");
+__device__ void Foo::morning(void* arg) {
+  int* recv_ints = (int*)arg;
+  printf("Good morning! Received %d and %d\n", *recv_ints, *(recv_ints+1));
 }
 
 __device__ size_t Foo::pack_size() {
@@ -56,7 +39,7 @@ __device__ void Foo::unpack(void* ptr) {
 }
 
 // Bar
-__device__ void Bar::hammer() {
+__device__ void Bar::hammer(void* arg) {
   printf("Hammer!\n");
 }
 
@@ -74,7 +57,6 @@ __device__ void Bar::unpack(void* ptr) {
 
 // Main
 __device__ void charm::main(charm::chare_type** chare_types) {
-#if 0
   // Create and populate object that will become the basis of chares
   Foo my_obj(1);
 
@@ -84,16 +66,10 @@ __device__ void charm::main(charm::chare_type** chare_types) {
   // Create chares using the data in my object
   my_chare->create(my_obj, 8);
 
-  // Invoke an entry method
+  // Invoke entry methods (chare index, entry method index, source buffer, buffer size)
   my_chare->invoke(2 /* Chare index */, 0 /* Entry method index */);
-#endif
-
-  long long start = clock64();
-  for (int i = 0; i < DUMMY_ITERS; i++) {
-    charm::send_dummy_msg(0);
-  }
-  long long end = clock64();
-  printf("Send avg clocks: %lld\n", (end - start) / DUMMY_ITERS);
+  int a[2] = {10, 11};
+  my_chare->invoke(3, 1, a, sizeof(int) * 2);
 
   // Send termination messages to all PEs
   charm::exit();

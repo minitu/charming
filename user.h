@@ -8,8 +8,8 @@ struct Foo {
 
   __device__ Foo() {}
   __device__ Foo(int i_) : i(i_) {}
-  __device__ void hello();
-  __device__ void morning();
+  __device__ void hello(void* arg);
+  __device__ void morning(void* arg);
 
   __device__ size_t pack_size();
   __device__ void pack(void* ptr);
@@ -21,7 +21,7 @@ struct Bar {
 
   __device__ Bar() {}
   __device__ Bar(char ch_) : ch(ch_) {}
-  __device__ void hammer();
+  __device__ void hammer(void* arg);
 
   __device__ size_t pack_size();
   __device__ void pack(void* ptr);

@@ -11,16 +11,16 @@ struct entry_method {
   int idx; // FIXME: Needed?
 
   __device__ entry_method(int idx_) : idx(idx_) {}
-  __device__ virtual void call(void* chare) const = 0;
+  __device__ virtual void call(void* chare, void* arg) const = 0;
 };
 
-template <typename C, typename T>
+template <typename C>
 struct entry_method_impl : entry_method {
-  nvstd::function<T> fn;
+  nvstd::function<void(C&,void*)> fn;
 
-  __device__ entry_method_impl(int idx, nvstd::function<T> fn_)
+  __device__ entry_method_impl(int idx, nvstd::function<void(C&,void*)> fn_)
     : entry_method(idx), fn(fn_) {}
-  __device__ virtual void call(void* chare) const { fn(*(C*)chare); }
+  __device__ virtual void call(void* chare, void* arg) const { fn(*(C*)chare, arg); }
 };
 
 struct chare_type {
@@ -30,7 +30,7 @@ struct chare_type {
   __device__ virtual void alloc(int count) = 0;
   __device__ virtual void set_indices(int start_idx_, int end_idx_) = 0;
   __device__ virtual void unpack(void* ptr, int idx) = 0;
-  __device__ virtual void call(int idx, int ep) = 0;
+  __device__ virtual void call(int idx, int ep, void* arg) = 0;
 };
 
 template <typename C>
@@ -58,9 +58,9 @@ struct chare : chare_type {
     objects[idx]->unpack(ptr);
   }
 
-  __device__ virtual void call(int idx, int ep) {
+  __device__ virtual void call(int idx, int ep, void* arg) {
     assert(idx >= start_idx && idx <= end_idx);
-    entry_methods[ep]->call(objects[idx - start_idx]);
+    entry_methods[ep]->call(objects[idx - start_idx], arg);
   }
 
   __device__ void create(C& obj, int n) {
@@ -111,15 +111,15 @@ struct chare : chare_type {
 
   // TODO
   // - Change to send to chare instead of PE
-  // - Support entry method parameters (single buffer for now)
   // Note: Chare should have been already created at this PE via a creation message
-  __device__ void invoke(int idx, int ep) {
+  inline __device__ void invoke(int idx, int ep) { invoke(idx, ep, nullptr, 0); }
+  __device__ void invoke(int idx, int ep, void* buf, size_t size) {
     if (idx == -1) {
       // TODO: Broadcast to all chares
     } else {
       // Send a regular message to the target PE
       // TODO: Need to figure out which PE to send it to
-      send_reg_msg(id, idx, ep, 0, idx);
+      send_reg_msg(id, idx, ep, buf, size, idx);
     }
   }
 };

@@ -51,13 +51,16 @@ __device__ void charm::send_dummy_msg(int dst_pe) {
 }
 
 __device__ void charm::send_reg_msg(int chare_id, int chare_idx, int ep_id,
-                                    size_t payload_size, int dst_pe) {
+                                    void* buf, size_t payload_size, int dst_pe) {
   size_t msg_size = envelope::alloc_size(sizeof(charm::regular_msg) + payload_size);
   envelope* env = create_envelope(msgtype::regular, msg_size);
 
   charm::regular_msg* msg = new ((char*)env + sizeof(envelope)) charm::regular_msg(chare_id, chare_idx, ep_id);
 
-  // TODO: Fill in payload
+  // Fill in payload
+  if (payload_size > 0) {
+    memcpy((char*)msg + sizeof(charm::regular_msg), buf, payload_size);
+  }
 
   send_msg(env, msg_size, dst_pe);
 }
@@ -75,15 +78,12 @@ __device__ __forceinline__ ssize_t next_msg(void* addr, bool& term_flag) {
   static clock_value_t end;
   envelope* env = (envelope*)addr;
 #ifdef DEBUG
-  /*
   printf("PE %d received msg type %d size %llu from PE %d\n",
          nvshmem_my_pe(), env->type, env->size, env->src_pe);
-         */
 #endif
 
   if (env->type == msgtype::dummy) {
     // Dummy message
-    //printf("PE %d dummy msg\n", nvshmem_my_pe());
     if (dummy_cnt == 0) {
       start = clock64();
     } else if (dummy_cnt == DUMMY_ITERS-1) {
@@ -112,7 +112,9 @@ __device__ __forceinline__ ssize_t next_msg(void* addr, bool& term_flag) {
     printf("PE %d regular msg chare ID %d chare idx %d EP ID %d\n", nvshmem_my_pe(), msg->chare_id, msg->chare_idx, msg->ep_id);
 #endif
     charm::chare_type*& chare_type = chare_types[msg->chare_id];
-    chare_type->call(msg->chare_idx, msg->ep_id);
+    void* payload = (char*)msg + sizeof(charm::regular_msg);
+    // TODO: Copy payload?
+    chare_type->call(msg->chare_idx, msg->ep_id, payload);
   } else if (env->type == msgtype::terminate) {
     // Termination message
 #ifdef DEBUG
