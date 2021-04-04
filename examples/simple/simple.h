@@ -1,7 +1,7 @@
 #ifndef _USER_H_
 #define _USER_H_
 
-#include "charming.h"
+#include <charming.h>
 
 struct Foo {
   int i;

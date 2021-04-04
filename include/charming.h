@@ -1,7 +1,7 @@
 #ifndef _CHARMING_H_
 #define _CHARMING_H_
 
-#include "chare.h"
+#include "../src/chare.h"
 
 #define DUMMY_ITERS 100000
 

@@ -1,5 +1,5 @@
 #include <stdio.h>
-#include "user.h"
+#include "simple.h"
 
 __device__ void charm::register_chare_types(charm::chare_type** chare_types) {
   // Register Foo and its entry methods
