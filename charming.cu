@@ -3,7 +3,7 @@
 #include <mpi.h>
 #include <nvshmem.h>
 #include <nvshmemx.h>
-#include "nvcharm.h"
+#include "charming.h"
 #include "message.h"
 #include "scheduler.h"
 #include "ringbuf.h"
@@ -52,7 +52,7 @@ int main(int argc, char* argv[]) {
   cudaDeviceProp prop;
   cudaGetDeviceProperties(&prop, 0);
   if (!rank) {
-    printf("NVCHARM\nGrid size: %d\nBlock size: %d\nStack size: %llu\nClock rate: %.2lf GHz\n",
+    printf("CHARMING\nGrid size: %d\nBlock size: %d\nStack size: %llu\nClock rate: %.2lf GHz\n",
            grid_size, block_size, stack_size, (double)prop.clockRate / 1e6);
   }
   //void* scheduler_args[4] = { &rbuf, &rbuf_size, &mbuf, &mbuf_size };

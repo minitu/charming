@@ -1,5 +1,5 @@
-#ifndef _NVCHARM_H_
-#define _NVCHARM_H_
+#ifndef _CHARMING_H_
+#define _CHARMING_H_
 
 #include "chare.h"
 

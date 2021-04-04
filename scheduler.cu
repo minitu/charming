@@ -1,5 +1,5 @@
 #include "scheduler.h"
-#include "nvcharm.h"
+#include "charming.h"
 #include "chare.h"
 #include "ringbuf.h"
 #include "util.h"

@@ -1,4 +1,4 @@
-TARGET = nvcharm
+TARGET = charming
 NVSHMEM_HOME ?= $(HOME)/nvshmem/install
 NVCC_OPTS = -arch=sm_70 -I$(NVSHMEM_HOME)/include -I$(MPI_ROOT)/include -DDEBUG
 NVCC_LINK = nvcc -ccbin=mpicxx $(NVCC_OPTS) -L$(NVSHMEM_HOME)/lib -lnvshmem -L$(MPI_ROOT)/lib -lmpi_ibm -lcuda -lcudart
