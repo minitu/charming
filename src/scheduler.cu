@@ -11,8 +11,6 @@ extern __device__ size_t rbuf_size;
 extern __device__ spsc_ringbuf_t* mbuf;
 extern __device__ size_t mbuf_size;
 
-//extern __device__ chare_type* chare_types[];
-
 __device__ envelope* charm::create_envelope(msgtype type, size_t msg_size) {
   // Secure region in my message pool
   ringbuf_off_t mret = spsc_ringbuf_acquire(mbuf, msg_size);
@@ -149,7 +147,7 @@ __global__ void charm::scheduler() {
     int n_pes = nvshmem_n_pes();
 
     // Register user chares and entry methods on all PEs
-    register_chare_types(chare_types);
+    register_chare_types();
 
     // Initialize message queue
     mpsc_ringbuf_init(rbuf, rbuf_size);
@@ -159,7 +157,7 @@ __global__ void charm::scheduler() {
 
     if (my_pe == 0) {
       // Execute user's main function
-      main(chare_types);
+      main();
     }
 
     nvshmem_barrier_all();

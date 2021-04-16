@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include "simple.h"
 
-__device__ void charm::register_chare_types(charm::chare_type** chare_types) {
+__device__ void charm::register_chare_types() {
   // Register Foo and its entry methods
   chare_types[0] = new charm::chare<Foo>(0);
   charm::entry_method**& foo_entry_methods = static_cast<charm::chare<Foo>*>(chare_types[0])->entry_methods;
@@ -56,7 +56,7 @@ __device__ void Bar::unpack(void* ptr) {
 }
 
 // Main
-__device__ void charm::main(charm::chare_type** chare_types) {
+__device__ void charm::main() {
   // Create and populate object that will become the basis of chares
   Foo my_obj(1);
 
