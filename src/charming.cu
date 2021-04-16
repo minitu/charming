@@ -18,7 +18,7 @@ __device__ size_t mbuf_size;
 
 using namespace charm;
 
-__device__ chare_type* chare_types[CHARE_TYPE_CNT_MAX];
+__device__ chare_type* charm::chare_types[CHARE_TYPE_CNT_MAX];
 
 int main(int argc, char* argv[]) {
   int rank;

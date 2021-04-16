@@ -3,8 +3,8 @@
 
 __device__ void charm::register_chare_types() {
   // Register Hello chare and its entry methods
-  chare_types[0] = new charm::chare<Hello>(0);
-  charm::entry_method**& entry_methods = static_cast<charm::chare<Hello>*>(chare_types[0])->entry_methods;
+  charm::chare_types[0] = new charm::chare<Hello>(0);
+  charm::entry_method**& entry_methods = static_cast<charm::chare<Hello>*>(charm::chare_types[0])->entry_methods;
   entry_methods = new charm::entry_method*[2];
   entry_methods[0] = new charm::entry_method_impl<Hello>(0, &Hello::greet);
 }
@@ -19,7 +19,7 @@ __device__ void Hello::greet(void* arg) {
   } else {
     int dst = recv_ints[0] + 1;
     int send_int[1] = {dst};
-    charm::chare<Hello>* my_chare = static_cast<charm::chare<Hello>*>(chare_types[0]);
+    charm::chare<Hello>* my_chare = static_cast<charm::chare<Hello>*>(charm::chare_types[0]);
     my_chare->invoke(dst, 0, send_int, sizeof(int));
   }
 }
@@ -34,7 +34,7 @@ __device__ void charm::main() {
   Hello my_obj;
 
   // Get a handle to the registered chare
-  charm::chare<Hello>* my_chare = static_cast<charm::chare<Hello>*>(chare_types[0]);
+  charm::chare<Hello>* my_chare = static_cast<charm::chare<Hello>*>(charm::chare_types[0]);
 
   // Create chares using the data in my object
   my_chare->create(my_obj, 20);

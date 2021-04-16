@@ -3,15 +3,15 @@
 
 __device__ void charm::register_chare_types() {
   // Register Foo and its entry methods
-  chare_types[0] = new charm::chare<Foo>(0);
-  charm::entry_method**& foo_entry_methods = static_cast<charm::chare<Foo>*>(chare_types[0])->entry_methods;
+  charm::chare_types[0] = new charm::chare<Foo>(0);
+  charm::entry_method**& foo_entry_methods = static_cast<charm::chare<Foo>*>(charm::chare_types[0])->entry_methods;
   foo_entry_methods = new charm::entry_method*[2];
   foo_entry_methods[0] = new charm::entry_method_impl<Foo>(0, &Foo::hello);
   foo_entry_methods[1] = new charm::entry_method_impl<Foo>(1, &Foo::morning);
 
   // Register Bar and its entry methods
-  chare_types[1] = new charm::chare<Bar>(1);
-  charm::entry_method**& bar_entry_methods = static_cast<charm::chare<Bar>*>(chare_types[1])->entry_methods;
+  charm::chare_types[1] = new charm::chare<Bar>(1);
+  charm::entry_method**& bar_entry_methods = static_cast<charm::chare<Bar>*>(charm::chare_types[1])->entry_methods;
   bar_entry_methods = new charm::entry_method*[1];
   bar_entry_methods[0] = new charm::entry_method_impl<Bar>(0, &Bar::hammer);
 }
@@ -61,7 +61,7 @@ __device__ void charm::main() {
   Foo my_obj(1);
 
   // Get a handle to the registered Foo chare
-  charm::chare<Foo>* my_chare = static_cast<charm::chare<Foo>*>(chare_types[0]);
+  charm::chare<Foo>* my_chare = static_cast<charm::chare<Foo>*>(charm::chare_types[0]);
 
   // Create chares using the data in my object
   my_chare->create(my_obj, 20);
