@@ -22,10 +22,6 @@ __device__ void Hello::greet(void* arg) {
   }
 }
 
-__device__ size_t Hello::pack_size() { return 0; }
-__device__ void Hello::pack(void* ptr) {}
-__device__ void Hello::unpack(void* ptr) {}
-
 // Main
 __device__ void charm::main() {
   // Create and populate object that will become the basis of chares

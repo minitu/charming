@@ -12,6 +12,11 @@ struct chare {
   int n;
 
   __device__ chare() : i(-1), n(0) {}
+
+  // Packing/unpacking functions to be overloaded by the user
+  __device__ size_t pack_size() { return 0; }
+  __device__ void pack(void* ptr) {}
+  __device__ void unpack(void* ptr) {}
 };
 
 struct entry_method {
