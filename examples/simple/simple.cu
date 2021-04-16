@@ -64,12 +64,12 @@ __device__ void charm::main(charm::chare_type** chare_types) {
   charm::chare<Foo>* my_chare = static_cast<charm::chare<Foo>*>(chare_types[0]);
 
   // Create chares using the data in my object
-  my_chare->create(my_obj, 8);
+  my_chare->create(my_obj, 20);
 
   // Invoke entry methods (chare index, entry method index, source buffer, buffer size)
-  my_chare->invoke(2 /* Chare index */, 0 /* Entry method index */);
+  my_chare->invoke(6 /* Chare index */, 0 /* Entry method index */);
   int a[2] = {10, 11};
-  my_chare->invoke(3, 1, a, sizeof(int) * 2);
+  my_chare->invoke(11, 1, a, sizeof(int) * 2);
 
   // Send termination messages to all PEs
   charm::exit();

@@ -28,6 +28,7 @@ struct chare_type {
 
   __device__ chare_type(int id_) : id(id_) {}
   __device__ virtual void alloc(int count, int start_idx, int end_idx) = 0;
+  __device__ virtual void store_loc_map(void* src) = 0;
   __device__ virtual void unpack(void* ptr, int idx) = 0;
   __device__ virtual void call(int idx, int ep, void* arg) = 0;
 };
@@ -35,21 +36,29 @@ struct chare_type {
 template <typename C>
 struct chare : chare_type {
   C** objects;
+  int n_chares;
+  entry_method** entry_methods;
+  int* loc_map;
   int start_idx;
   int end_idx;
-  entry_method** entry_methods;
 
   __device__ chare(int id_)
-    : chare_type(id_), objects(nullptr), start_idx(-1),
+    : chare_type(id_), objects(nullptr), n_chares(0), start_idx(-1),
       end_idx(-1), entry_methods(nullptr) {}
 
   __device__ virtual void alloc(int count, int start_idx_, int end_idx_) {
-    objects = new C*[count];
+    n_chares = count;
+    objects = new C*[n_chares];
     start_idx = start_idx_;
     end_idx = end_idx_;
   }
 
   __device__ void set(C& obj, int idx) { objects[idx] = new C(obj); }
+
+  __device__ virtual void store_loc_map(void* src) {
+    loc_map = new int[n_chares];
+    memcpy(loc_map, src, sizeof(int) * n_chares);
+  }
 
   __device__ virtual void unpack(void* ptr, int idx) {
     objects[idx] = new C;
@@ -61,12 +70,16 @@ struct chare : chare_type {
     entry_methods[ep]->call(objects[idx - start_idx], arg);
   }
 
+  // Only called on PE 0
   __device__ void create(C& obj, int n) {
     // Divide the chares across all PEs
     int n_pes = nvshmem_n_pes();
     int my_pe = nvshmem_my_pe();
     int n_per_pe = n / n_pes;
     int rem = n % n_pes;
+
+    // Allocate space for chare-PE map
+    loc_map = new int[n];
 
     // Create chares
     // TODO: Currently block mapping
@@ -81,6 +94,11 @@ struct chare : chare_type {
       // Update end chare index
       end_idx_ = start_idx_ + n_this - 1;
 
+      // Fill in chare-PE map
+      for (int i = start_idx_; i <= end_idx_; i++) {
+        loc_map[i] = pe;
+      }
+
       // Create chares for this PE
       if (pe == my_pe) {
         alloc(n_this, start_idx_, end_idx_);
@@ -89,11 +107,15 @@ struct chare : chare_type {
         }
       } else {
         // Send creation messages to all other PEs
-        size_t payload_size = obj.pack_size();
+        // Payload includes chare-PE map and packed seed object
+        size_t payload_size = sizeof(int) * n + obj.pack_size();
         size_t msg_size = envelope::alloc_size(sizeof(create_msg) + payload_size);
         envelope* env = create_envelope(msgtype::create, msg_size);
         create_msg* msg = new ((char*)env + sizeof(envelope)) create_msg(id, n_this, start_idx_, end_idx_);
-        obj.pack((char*)msg + sizeof(create_msg));
+        char* tmp = (char*)msg + sizeof(create_msg);
+        memcpy(tmp, loc_map, sizeof(int) * n);
+        tmp += sizeof(int) * n;
+        obj.pack(tmp);
 
         send_msg(env, msg_size, pe);
       }
@@ -103,8 +125,6 @@ struct chare : chare_type {
     }
   }
 
-  // TODO
-  // - Change to send to chare instead of PE
   // Note: Chare should have been already created at this PE via a creation message
   inline __device__ void invoke(int idx, int ep) { invoke(idx, ep, nullptr, 0); }
   __device__ void invoke(int idx, int ep, void* buf, size_t size) {
@@ -112,8 +132,7 @@ struct chare : chare_type {
       // TODO: Broadcast to all chares
     } else {
       // Send a regular message to the target PE
-      // TODO: Need to figure out which PE to send it to
-      send_reg_msg(id, idx, ep, buf, size, idx);
+      send_reg_msg(id, idx, ep, buf, size, loc_map[idx]);
     }
   }
 };

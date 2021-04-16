@@ -100,9 +100,11 @@ __device__ __forceinline__ ssize_t next_msg(void* addr, bool& term_flag) {
 #endif
     charm::chare_type*& chare_type = chare_types[msg->chare_id];
     chare_type->alloc(msg->n_chares, msg->start_idx, msg->end_idx);
-    void* packed_data = (char*)msg + sizeof(charm::create_msg);
+    char* tmp = (char*)msg + sizeof(charm::create_msg);
+    chare_type->store_loc_map(tmp);
+    tmp += sizeof(int) * msg->n_chares;
     for (int i = 0; i < msg->n_chares; i++) {
-      chare_type->unpack(packed_data, i);
+      chare_type->unpack(tmp, i);
     }
   } else if (env->type == msgtype::regular) {
     // Regular message
