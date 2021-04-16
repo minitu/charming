@@ -83,14 +83,10 @@ struct chare : chare_type {
 
       // Create chares for this PE
       if (pe == my_pe) {
-        alloc(n_this);
+        alloc(n_this, start_idx_, end_idx_);
         for (int i = 0; i < n_this; i++) {
           set(obj, i);
         }
-
-        // Store chare index range
-        start_idx = start_idx_;
-        end_idx = end_idx_;
       } else {
         // Send creation messages to all other PEs
         size_t payload_size = obj.pack_size();
