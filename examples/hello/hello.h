@@ -3,7 +3,7 @@
 
 #include <charming.h>
 
-struct Hello {
+struct Hello : charm::chare {
   __device__ Hello() {}
   __device__ void greet(void* arg);
 

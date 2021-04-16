@@ -7,6 +7,13 @@
 
 namespace charm {
 
+struct chare {
+  int i;
+  int n;
+
+  __device__ chare() : i(-1), n(0) {}
+};
+
 struct entry_method {
   int idx; // FIXME: Needed?
 
@@ -23,10 +30,10 @@ struct entry_method_impl : entry_method {
   __device__ virtual void call(void* chare, void* arg) const { fn(*(C*)chare, arg); }
 };
 
-struct chare_type {
+struct chare_proxy_base {
   int id;
 
-  __device__ chare_type(int id_) : id(id_) {}
+  __device__ chare_proxy_base(int id_) : id(id_) {}
   __device__ virtual void alloc(int n_local, int n_total, int start_idx, int end_idx) = 0;
   __device__ virtual void store_loc_map(void* src) = 0;
   __device__ virtual void unpack(void* ptr, int idx) = 0;
@@ -34,7 +41,7 @@ struct chare_type {
 };
 
 template <typename C>
-struct chare : chare_type {
+struct chare_proxy : chare_proxy_base {
   C** objects;
   int n_local;
   int n_total;
@@ -43,8 +50,8 @@ struct chare : chare_type {
   int start_idx;
   int end_idx;
 
-  __device__ chare(int id_)
-    : chare_type(id_), objects(nullptr), n_local(0), n_total(0), start_idx(-1),
+  __device__ chare_proxy(int id_)
+    : chare_proxy_base(id_), objects(nullptr), n_local(0), n_total(0), start_idx(-1),
       end_idx(-1), entry_methods(nullptr) {}
 
   __device__ virtual void alloc(int n_local_, int n_total_, int start_idx_, int end_idx_) {
@@ -55,16 +62,31 @@ struct chare : chare_type {
     end_idx = end_idx_;
   }
 
-  __device__ void set(C& obj, int idx) { objects[idx] = new C(obj); }
-
   __device__ virtual void store_loc_map(void* src) {
     loc_map = new int[n_total];
     memcpy(loc_map, src, sizeof(int) * n_total);
   }
 
+  // Used locally (instead of unpack)
+  __device__ void set(C& obj, int idx) {
+    objects[idx] = new C(obj);
+
+    init_chare(idx);
+  }
+
+  // Used on remote PEs (instead of set)
   __device__ virtual void unpack(void* ptr, int idx) {
     objects[idx] = new C;
     objects[idx]->unpack(ptr);
+
+    init_chare(idx);
+  }
+
+  // Initialize chare metadata
+  // Make chare index and number of chares accessible to the user
+  __device__ void init_chare(int idx) {
+    objects[idx]->i = start_idx + idx;
+    objects[idx]->n = n_total;
   }
 
   __device__ virtual void call(int idx, int ep, void* arg) {

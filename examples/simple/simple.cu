@@ -1,24 +1,24 @@
 #include <stdio.h>
 #include "simple.h"
 
-__device__ void charm::register_chare_types() {
+__device__ void charm::register_chares() {
   // Register Foo and its entry methods
-  charm::chare_types[0] = new charm::chare<Foo>(0);
-  charm::entry_method**& foo_entry_methods = static_cast<charm::chare<Foo>*>(charm::chare_types[0])->entry_methods;
+  charm::chare_proxies[0] = new charm::chare_proxy<Foo>(0);
+  charm::entry_method**& foo_entry_methods = static_cast<charm::chare_proxy<Foo>*>(charm::chare_proxies[0])->entry_methods;
   foo_entry_methods = new charm::entry_method*[2];
   foo_entry_methods[0] = new charm::entry_method_impl<Foo>(0, &Foo::hello);
   foo_entry_methods[1] = new charm::entry_method_impl<Foo>(1, &Foo::morning);
 
   // Register Bar and its entry methods
-  charm::chare_types[1] = new charm::chare<Bar>(1);
-  charm::entry_method**& bar_entry_methods = static_cast<charm::chare<Bar>*>(charm::chare_types[1])->entry_methods;
+  charm::chare_proxies[1] = new charm::chare_proxy<Bar>(1);
+  charm::entry_method**& bar_entry_methods = static_cast<charm::chare_proxy<Bar>*>(charm::chare_proxies[1])->entry_methods;
   bar_entry_methods = new charm::entry_method*[1];
   bar_entry_methods[0] = new charm::entry_method_impl<Bar>(0, &Bar::hammer);
 }
 
 // Foo
 __device__ void Foo::hello(void* arg) {
-  printf("Hello! My int is %d\n", i);
+  printf("Hello! My int is %d\n", my_int);
 }
 
 __device__ void Foo::morning(void* arg) {
@@ -31,11 +31,11 @@ __device__ size_t Foo::pack_size() {
 }
 
 __device__ void Foo::pack(void* ptr) {
-  *(int*)ptr = i;
+  *(int*)ptr = my_int;
 }
 
 __device__ void Foo::unpack(void* ptr) {
-  i = *(int*)ptr;
+  my_int = *(int*)ptr;
 }
 
 // Bar
@@ -61,7 +61,7 @@ __device__ void charm::main() {
   Foo my_obj(1);
 
   // Get a handle to the registered Foo chare
-  charm::chare<Foo>* my_chare = static_cast<charm::chare<Foo>*>(charm::chare_types[0]);
+  charm::chare_proxy<Foo>* my_chare = static_cast<charm::chare_proxy<Foo>*>(charm::chare_proxies[0]);
 
   // Create chares using the data in my object
   my_chare->create(my_obj, 20);

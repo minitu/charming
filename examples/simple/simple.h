@@ -3,11 +3,11 @@
 
 #include <charming.h>
 
-struct Foo {
-  int i;
+struct Foo : charm::chare {
+  int my_int;
 
   __device__ Foo() {}
-  __device__ Foo(int i_) : i(i_) {}
+  __device__ Foo(int my_int_) : my_int(my_int_) {}
   __device__ void hello(void* arg);
   __device__ void morning(void* arg);
 
@@ -16,7 +16,7 @@ struct Foo {
   __device__ void unpack(void* ptr);
 };
 
-struct Bar {
+struct Bar : charm::chare {
   char ch;
 
   __device__ Bar() {}

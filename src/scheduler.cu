@@ -96,13 +96,13 @@ __device__ __forceinline__ ssize_t next_msg(void* addr, bool& term_flag) {
     printf("PE %d creation msg chare ID %d, n_local %d, n_total %d, start idx %d, end idx %d\n",
            nvshmem_my_pe(), msg->chare_id, msg->n_local, msg->n_total, msg->start_idx, msg->end_idx);
 #endif
-    chare_type*& chare_type = chare_types[msg->chare_id];
-    chare_type->alloc(msg->n_local, msg->n_total, msg->start_idx, msg->end_idx);
+    chare_proxy_base*& chare_proxy = chare_proxies[msg->chare_id];
+    chare_proxy->alloc(msg->n_local, msg->n_total, msg->start_idx, msg->end_idx);
     char* tmp = (char*)msg + sizeof(create_msg);
-    chare_type->store_loc_map(tmp);
+    chare_proxy->store_loc_map(tmp);
     tmp += sizeof(int) * msg->n_total;
     for (int i = 0; i < msg->n_local; i++) {
-      chare_type->unpack(tmp, i);
+      chare_proxy->unpack(tmp, i);
     }
   } else if (env->type == msgtype::regular) {
     // Regular message
@@ -110,10 +110,10 @@ __device__ __forceinline__ ssize_t next_msg(void* addr, bool& term_flag) {
 #ifdef DEBUG
     printf("PE %d regular msg chare ID %d chare idx %d EP ID %d\n", nvshmem_my_pe(), msg->chare_id, msg->chare_idx, msg->ep_id);
 #endif
-    chare_type*& chare_type = chare_types[msg->chare_id];
+    chare_proxy_base*& chare_proxy = chare_proxies[msg->chare_id];
     void* payload = (char*)msg + sizeof(regular_msg);
     // TODO: Copy payload?
-    chare_type->call(msg->chare_idx, msg->ep_id, payload);
+    chare_proxy->call(msg->chare_idx, msg->ep_id, payload);
   } else if (env->type == msgtype::terminate) {
     // Termination message
 #ifdef DEBUG
@@ -147,7 +147,7 @@ __global__ void charm::scheduler() {
     int n_pes = nvshmem_n_pes();
 
     // Register user chares and entry methods on all PEs
-    register_chare_types();
+    register_chares();
 
     // Initialize message queue
     mpsc_ringbuf_init(rbuf, rbuf_size);
