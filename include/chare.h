@@ -27,7 +27,7 @@ struct chare_type {
   int id;
 
   __device__ chare_type(int id_) : id(id_) {}
-  __device__ virtual void alloc(int count, int start_idx, int end_idx) = 0;
+  __device__ virtual void alloc(int n_local, int n_total, int start_idx, int end_idx) = 0;
   __device__ virtual void store_loc_map(void* src) = 0;
   __device__ virtual void unpack(void* ptr, int idx) = 0;
   __device__ virtual void call(int idx, int ep, void* arg) = 0;
@@ -36,19 +36,21 @@ struct chare_type {
 template <typename C>
 struct chare : chare_type {
   C** objects;
-  int n_chares;
+  int n_local;
+  int n_total;
   entry_method** entry_methods;
   int* loc_map;
   int start_idx;
   int end_idx;
 
   __device__ chare(int id_)
-    : chare_type(id_), objects(nullptr), n_chares(0), start_idx(-1),
+    : chare_type(id_), objects(nullptr), n_local(0), n_total(0), start_idx(-1),
       end_idx(-1), entry_methods(nullptr) {}
 
-  __device__ virtual void alloc(int count, int start_idx_, int end_idx_) {
-    n_chares = count;
-    objects = new C*[n_chares];
+  __device__ virtual void alloc(int n_local_, int n_total_, int start_idx_, int end_idx_) {
+    n_local = n_local_;
+    n_total = n_total_;
+    objects = new C*[n_local];
     start_idx = start_idx_;
     end_idx = end_idx_;
   }
@@ -56,8 +58,8 @@ struct chare : chare_type {
   __device__ void set(C& obj, int idx) { objects[idx] = new C(obj); }
 
   __device__ virtual void store_loc_map(void* src) {
-    loc_map = new int[n_chares];
-    memcpy(loc_map, src, sizeof(int) * n_chares);
+    loc_map = new int[n_total];
+    memcpy(loc_map, src, sizeof(int) * n_total);
   }
 
   __device__ virtual void unpack(void* ptr, int idx) {
@@ -71,6 +73,7 @@ struct chare : chare_type {
   }
 
   // Only called on PE 0
+  // FIXME: Currently only block mapping
   __device__ void create(C& obj, int n) {
     // Divide the chares across all PEs
     int n_pes = nvshmem_n_pes();
@@ -78,11 +81,8 @@ struct chare : chare_type {
     int n_per_pe = n / n_pes;
     int rem = n % n_pes;
 
-    // Allocate space for chare-PE map
+    // Create chare-PE map
     loc_map = new int[n];
-
-    // Create chares
-    // TODO: Currently block mapping
     int n_this = -1;
     int start_idx_ = 0;
     int end_idx_ = 0;
@@ -99,9 +99,26 @@ struct chare : chare_type {
         loc_map[i] = pe;
       }
 
+      // Update start chare index
+      start_idx_ += n_this;
+    }
+
+    // Create chares
+    // FIXME: Code duplication with above
+    n_this = -1;
+    start_idx_ = 0;
+    end_idx_ = 0;
+    for (int pe = 0; pe < n_pes; pe++) {
+      // Figure out number of chares for this PE
+      n_this = n_per_pe;
+      if (pe < rem) n_this++;
+
+      // Update end chare index
+      end_idx_ = start_idx_ + n_this - 1;
+
       // Create chares for this PE
       if (pe == my_pe) {
-        alloc(n_this, start_idx_, end_idx_);
+        alloc(n_this, n, start_idx_, end_idx_);
         for (int i = 0; i < n_this; i++) {
           set(obj, i);
         }
@@ -111,7 +128,7 @@ struct chare : chare_type {
         size_t payload_size = sizeof(int) * n + obj.pack_size();
         size_t msg_size = envelope::alloc_size(sizeof(create_msg) + payload_size);
         envelope* env = create_envelope(msgtype::create, msg_size);
-        create_msg* msg = new ((char*)env + sizeof(envelope)) create_msg(id, n_this, start_idx_, end_idx_);
+        create_msg* msg = new ((char*)env + sizeof(envelope)) create_msg(id, n_this, n, start_idx_, end_idx_);
         char* tmp = (char*)msg + sizeof(create_msg);
         memcpy(tmp, loc_map, sizeof(int) * n);
         tmp += sizeof(int) * n;

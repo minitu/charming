@@ -1,5 +1,5 @@
-#ifndef _USER_H_
-#define _USER_H_
+#ifndef _SIMPLE_H_
+#define _SIMPLE_H_
 
 #include <charming.h>
 

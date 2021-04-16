@@ -11,7 +11,7 @@ extern __device__ size_t rbuf_size;
 extern __device__ spsc_ringbuf_t* mbuf;
 extern __device__ size_t mbuf_size;
 
-extern __device__ chare_type* chare_types[];
+//extern __device__ chare_type* chare_types[];
 
 __device__ envelope* charm::create_envelope(msgtype type, size_t msg_size) {
   // Secure region in my message pool
@@ -95,15 +95,15 @@ __device__ __forceinline__ ssize_t next_msg(void* addr, bool& term_flag) {
     // Creation message
     create_msg* msg = (create_msg*)((char*)env + sizeof(envelope));
 #ifdef DEBUG
-    printf("PE %d creation msg chare ID %d, n_chares %d, start idx %d, end idx %d\n",
-           nvshmem_my_pe(), msg->chare_id, msg->n_chares, msg->start_idx, msg->end_idx);
+    printf("PE %d creation msg chare ID %d, n_local %d, n_total %d, start idx %d, end idx %d\n",
+           nvshmem_my_pe(), msg->chare_id, msg->n_local, msg->n_total, msg->start_idx, msg->end_idx);
 #endif
     chare_type*& chare_type = chare_types[msg->chare_id];
-    chare_type->alloc(msg->n_chares, msg->start_idx, msg->end_idx);
+    chare_type->alloc(msg->n_local, msg->n_total, msg->start_idx, msg->end_idx);
     char* tmp = (char*)msg + sizeof(create_msg);
     chare_type->store_loc_map(tmp);
-    tmp += sizeof(int) * msg->n_chares;
-    for (int i = 0; i < msg->n_chares; i++) {
+    tmp += sizeof(int) * msg->n_total;
+    for (int i = 0; i < msg->n_local; i++) {
       chare_type->unpack(tmp, i);
     }
   } else if (env->type == msgtype::regular) {

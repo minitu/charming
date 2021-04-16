@@ -42,12 +42,13 @@ struct alignas(ALIGN_SIZE) regular_msg {
 
 struct alignas(ALIGN_SIZE) create_msg {
   alignas(ALIGN_SIZE) int chare_id;
-  alignas(ALIGN_SIZE) int n_chares;
+  alignas(ALIGN_SIZE) int n_local;
+  alignas(ALIGN_SIZE) int n_total;
   alignas(ALIGN_SIZE) int start_idx;
   alignas(ALIGN_SIZE) int end_idx;
 
-  __device__ create_msg(int chare_id_, int n_chares_, int start_idx_, int end_idx_)
-    : chare_id(chare_id_), n_chares(n_chares_), start_idx(start_idx_), end_idx(end_idx_) {}
+  __device__ create_msg(int chare_id_, int n_local_, int n_total_, int start_idx_, int end_idx_)
+    : chare_id(chare_id_), n_local(n_local_), n_total(n_total_), start_idx(start_idx_), end_idx(end_idx_) {}
 };
 
 }

@@ -16,4 +16,6 @@ __device__ void exit();
 
 }
 
+extern __device__ charm::chare_type* chare_types[];
+
 #endif
