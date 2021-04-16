@@ -12,6 +12,7 @@ __device__ void send_reg_msg(int chare_id, int chare_idx, int ep_id, void* buf, 
 __device__ void send_term_msg(int dst_pe);
 
 __global__ void scheduler();
+
 }
 
 #endif // _SCHEDULER_H_

@@ -7,9 +7,9 @@ NVCC_LINK = nvcc -ccbin=mpicxx $(NVCC_OPTS) -L$(NVSHMEM_HOME)/lib -lnvshmem -L$(
 NVCC = nvcc --std=c++11 -dc $(NVCC_OPTS)
 
 HEADERS = include/$(TARGET).h \
-          src/message.h \
-          src/scheduler.h \
-          src/chare.h \
+          include/message.h \
+          include/scheduler.h \
+          include/chare.h \
           src/ringbuf.h \
           src/util.h
 
@@ -28,10 +28,7 @@ $(BUILD_DIR)/lib$(TARGET).a: $(OBJS)
 	ar cru $@ $^
 	ranlib $@
 
-$(BUILD_DIR)/$(TARGET).o: src/$(TARGET).cu $(HEADERS)
-	$(NVCC) -o $@ -c $<
-
-$(BUILD_DIR)/%.o: src/%.cu src/%.h
+$(BUILD_DIR)/%.o: src/%.cu $(HEADERS)
 	$(NVCC) -o $@ -c $<
 
 .PHONY: clean

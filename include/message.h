@@ -1,8 +1,6 @@
 #ifndef _MESSAGE_H_
 #define _MESSAGE_H_
 
-#include <stdio.h>
-
 #define ALIGN_SIZE 16
 
 namespace charm {
