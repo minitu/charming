@@ -27,8 +27,7 @@ struct chare_type {
   int id;
 
   __device__ chare_type(int id_) : id(id_) {}
-  __device__ virtual void alloc(int count) = 0;
-  __device__ virtual void set_indices(int start_idx_, int end_idx_) = 0;
+  __device__ virtual void alloc(int count, int start_idx, int end_idx) = 0;
   __device__ virtual void unpack(void* ptr, int idx) = 0;
   __device__ virtual void call(int idx, int ep, void* arg) = 0;
 };
@@ -44,9 +43,8 @@ struct chare : chare_type {
     : chare_type(id_), objects(nullptr), start_idx(-1),
       end_idx(-1), entry_methods(nullptr) {}
 
-  __device__ virtual void alloc(int count) { objects = new C*[count]; }
-
-  __device__ virtual void set_indices(int start_idx_, int end_idx_) {
+  __device__ virtual void alloc(int count, int start_idx_, int end_idx_) {
+    objects = new C*[count];
     start_idx = start_idx_;
     end_idx = end_idx_;
   }

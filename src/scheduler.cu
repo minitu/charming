@@ -99,8 +99,7 @@ __device__ __forceinline__ ssize_t next_msg(void* addr, bool& term_flag) {
            nvshmem_my_pe(), msg->chare_id, msg->n_chares, msg->start_idx, msg->end_idx);
 #endif
     charm::chare_type*& chare_type = chare_types[msg->chare_id];
-    chare_type->alloc(msg->n_chares);
-    chare_type->set_indices(msg->start_idx, msg->end_idx);
+    chare_type->alloc(msg->n_chares, msg->start_idx, msg->end_idx);
     void* packed_data = (char*)msg + sizeof(charm::create_msg);
     for (int i = 0; i < msg->n_chares; i++) {
       chare_type->unpack(packed_data, i);
@@ -147,7 +146,7 @@ __global__ void charm::scheduler() {
     int my_pe = nvshmem_my_pe();
     int n_pes = nvshmem_n_pes();
 
-    // Register all chares and entry methods
+    // Register user chares and entry methods on all PEs
     register_chare_types(chare_types);
 
     // Initialize message queue
