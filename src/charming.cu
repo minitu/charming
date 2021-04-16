@@ -16,7 +16,9 @@ __device__ size_t rbuf_size;
 __device__ spsc_ringbuf_t* mbuf;
 __device__ size_t mbuf_size;
 
-__device__ charm::chare_type* chare_types[CHARE_TYPE_CNT_MAX];
+using namespace charm;
+
+__device__ chare_type* chare_types[CHARE_TYPE_CNT_MAX];
 
 int main(int argc, char* argv[]) {
   int rank;
@@ -61,11 +63,11 @@ int main(int argc, char* argv[]) {
   cudaMemcpyToSymbolAsync(mbuf, &h_mbuf, sizeof(spsc_ringbuf_t*), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(mbuf_size, &h_mbuf_size, sizeof(size_t), 0, cudaMemcpyHostToDevice, stream);
   /* TODO: This doesn't support CUDA dynamic parallelism, will it be a problem?
-  nvshmemx_collective_launch((const void*)charm::scheduler, grid_size, block_size,
+  nvshmemx_collective_launch((const void*)scheduler, grid_size, block_size,
       //scheduler_args, 0, stream);
       nullptr, 0, stream);
       */
-  charm::scheduler<<<grid_size, block_size, 0, stream>>>();
+  scheduler<<<grid_size, block_size, 0, stream>>>();
   cuda_check_error();
   cudaStreamSynchronize(stream);
   //nvshmemx_barrier_all_on_stream(stream); // Hangs

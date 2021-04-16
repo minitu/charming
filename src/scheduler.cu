@@ -52,14 +52,14 @@ __device__ void charm::send_dummy_msg(int dst_pe) {
 
 __device__ void charm::send_reg_msg(int chare_id, int chare_idx, int ep_id,
                                     void* buf, size_t payload_size, int dst_pe) {
-  size_t msg_size = envelope::alloc_size(sizeof(charm::regular_msg) + payload_size);
+  size_t msg_size = envelope::alloc_size(sizeof(regular_msg) + payload_size);
   envelope* env = create_envelope(msgtype::regular, msg_size);
 
-  charm::regular_msg* msg = new ((char*)env + sizeof(envelope)) charm::regular_msg(chare_id, chare_idx, ep_id);
+  regular_msg* msg = new ((char*)env + sizeof(envelope)) regular_msg(chare_id, chare_idx, ep_id);
 
   // Fill in payload
   if (payload_size > 0) {
-    memcpy((char*)msg + sizeof(charm::regular_msg), buf, payload_size);
+    memcpy((char*)msg + sizeof(regular_msg), buf, payload_size);
   }
 
   send_msg(env, msg_size, dst_pe);
@@ -93,14 +93,14 @@ __device__ __forceinline__ ssize_t next_msg(void* addr, bool& term_flag) {
     dummy_cnt++;
   } else if (env->type == msgtype::create) {
     // Creation message
-    charm::create_msg* msg = (charm::create_msg*)((char*)env + sizeof(envelope));
+    create_msg* msg = (create_msg*)((char*)env + sizeof(envelope));
 #ifdef DEBUG
     printf("PE %d creation msg chare ID %d, n_chares %d, start idx %d, end idx %d\n",
            nvshmem_my_pe(), msg->chare_id, msg->n_chares, msg->start_idx, msg->end_idx);
 #endif
-    charm::chare_type*& chare_type = chare_types[msg->chare_id];
+    chare_type*& chare_type = chare_types[msg->chare_id];
     chare_type->alloc(msg->n_chares, msg->start_idx, msg->end_idx);
-    char* tmp = (char*)msg + sizeof(charm::create_msg);
+    char* tmp = (char*)msg + sizeof(create_msg);
     chare_type->store_loc_map(tmp);
     tmp += sizeof(int) * msg->n_chares;
     for (int i = 0; i < msg->n_chares; i++) {
@@ -108,12 +108,12 @@ __device__ __forceinline__ ssize_t next_msg(void* addr, bool& term_flag) {
     }
   } else if (env->type == msgtype::regular) {
     // Regular message
-    charm::regular_msg* msg = (charm::regular_msg*)((char*)env + sizeof(envelope));
+    regular_msg* msg = (regular_msg*)((char*)env + sizeof(envelope));
 #ifdef DEBUG
     printf("PE %d regular msg chare ID %d chare idx %d EP ID %d\n", nvshmem_my_pe(), msg->chare_id, msg->chare_idx, msg->ep_id);
 #endif
-    charm::chare_type*& chare_type = chare_types[msg->chare_id];
-    void* payload = (char*)msg + sizeof(charm::regular_msg);
+    chare_type*& chare_type = chare_types[msg->chare_id];
+    void* payload = (char*)msg + sizeof(regular_msg);
     // TODO: Copy payload?
     chare_type->call(msg->chare_idx, msg->ep_id, payload);
   } else if (env->type == msgtype::terminate) {
