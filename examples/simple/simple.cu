@@ -1,19 +1,18 @@
 #include <stdio.h>
 #include "simple.h"
 
+__device__ charm::chare_proxy<Foo>* foo_proxy;
+__device__ charm::chare_proxy<Bar>* bar_proxy;
+
 __device__ void charm::register_chares() {
-  // Register Foo and its entry methods
-  charm::chare_proxies[0] = new charm::chare_proxy<Foo>(0);
-  charm::entry_method**& foo_entry_methods = static_cast<charm::chare_proxy<Foo>*>(charm::chare_proxies[0])->entry_methods;
-  foo_entry_methods = new charm::entry_method*[2];
-  foo_entry_methods[0] = new charm::entry_method_impl<Foo>(0, &Foo::hello);
-  foo_entry_methods[1] = new charm::entry_method_impl<Foo>(1, &Foo::morning);
+  // Register chares and entry methods
+  charm::chare_proxies[0] = foo_proxy = new charm::chare_proxy<Foo>(0, 2);
+  foo_proxy->add_entry_method(&Foo::hello);
+  foo_proxy->add_entry_method(&Foo::morning);
 
   // Register Bar and its entry methods
-  charm::chare_proxies[1] = new charm::chare_proxy<Bar>(1);
-  charm::entry_method**& bar_entry_methods = static_cast<charm::chare_proxy<Bar>*>(charm::chare_proxies[1])->entry_methods;
-  bar_entry_methods = new charm::entry_method*[1];
-  bar_entry_methods[0] = new charm::entry_method_impl<Bar>(0, &Bar::hammer);
+  charm::chare_proxies[1] = bar_proxy = new charm::chare_proxy<Bar>(1, 1);
+  bar_proxy->add_entry_method(&Bar::hammer);
 }
 
 // Foo
@@ -60,16 +59,13 @@ __device__ void charm::main() {
   // Create and populate object that will become the basis of chares
   Foo my_obj(1);
 
-  // Get a handle to the registered Foo chare
-  charm::chare_proxy<Foo>* my_chare = static_cast<charm::chare_proxy<Foo>*>(charm::chare_proxies[0]);
-
-  // Create chares using the data in my object
-  my_chare->create(my_obj, 20);
+  // Create Foo chares using the data in my object
+  foo_proxy->create(my_obj, 20);
 
   // Invoke entry methods (chare index, entry method index, source buffer, buffer size)
-  my_chare->invoke(6 /* Chare index */, 0 /* Entry method index */);
+  foo_proxy->invoke(6 /* Chare index */, 0 /* Entry method index */);
   int a[2] = {10, 11};
-  my_chare->invoke(11, 1, a, sizeof(int) * 2);
+  foo_proxy->invoke(11, 1, a, sizeof(int) * 2);
 
   // Send termination messages to all PEs
   charm::exit();

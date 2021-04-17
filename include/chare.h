@@ -19,19 +19,11 @@ struct chare {
   __device__ void unpack(void* ptr) {}
 };
 
-struct entry_method {
-  int idx; // FIXME: Needed?
-
-  __device__ entry_method(int idx_) : idx(idx_) {}
-  __device__ virtual void call(void* chare, void* arg) const = 0;
-};
-
 template <typename C>
-struct entry_method_impl : entry_method {
+struct entry_method {
   nvstd::function<void(C&,void*)> fn;
 
-  __device__ entry_method_impl(int idx, nvstd::function<void(C&,void*)> fn_)
-    : entry_method(idx), fn(fn_) {}
+  __device__ entry_method(nvstd::function<void(C&,void*)> fn_) : fn(fn_) {}
   __device__ virtual void call(void* chare, void* arg) const { fn(*(C*)chare, arg); }
 };
 
@@ -50,14 +42,21 @@ struct chare_proxy : chare_proxy_base {
   C** objects;
   int n_local;
   int n_total;
-  entry_method** entry_methods;
+  entry_method<C>** entry_methods;
+  int em_count;
   int* loc_map;
   int start_idx;
   int end_idx;
 
-  __device__ chare_proxy(int id_)
+  __device__ chare_proxy(int id_, int n_em)
     : chare_proxy_base(id_), objects(nullptr), n_local(0), n_total(0), start_idx(-1),
-      end_idx(-1), entry_methods(nullptr) {}
+      end_idx(-1), entry_methods(nullptr), em_count(0) {
+    entry_methods = new entry_method<C>*[n_em];
+  }
+
+  __device__ void add_entry_method(const nvstd::function<void(C&,void*)>& fn) {
+    entry_methods[em_count++] = new entry_method<C>(fn);
+  }
 
   __device__ virtual void alloc(int n_local_, int n_total_, int start_idx_, int end_idx_) {
     n_local = n_local_;
