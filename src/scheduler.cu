@@ -142,7 +142,7 @@ __device__ __forceinline__ void recv_msg(bool &term_flag) {
   }
 }
 
-__global__ void charm::scheduler() {
+__global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
   if (!blockIdx.x && !threadIdx.x) {
     bool term_flag = false;
     int my_pe = nvshmem_my_pe();
@@ -160,7 +160,7 @@ __global__ void charm::scheduler() {
 
     if (my_pe == 0) {
       // Execute user's main function
-      main();
+      main(argc, argv, argvs);
     }
 
     nvshmem_barrier_all();

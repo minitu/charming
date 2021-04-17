@@ -55,7 +55,7 @@ __device__ void Bar::unpack(void* ptr) {
 }
 
 // Main
-__device__ void charm::main() {
+__device__ void charm::main(int argc, char** argv, size_t* argvs) {
   // Create and populate objects that will become the basis of chares
   Foo my_foo(1);
   Bar my_bar('c');

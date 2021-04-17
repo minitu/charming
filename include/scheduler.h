@@ -11,7 +11,7 @@ __device__ void send_dummy_msg(int dst_pe);
 __device__ void send_reg_msg(int chare_id, int chare_idx, int ep_id, void* buf, size_t payload_size, int dst_pe);
 __device__ void send_term_msg(int dst_pe);
 
-__global__ void scheduler();
+__global__ void scheduler(int argc, char** argv, size_t* argvs);
 
 }
 

@@ -9,7 +9,7 @@ namespace charm {
 
 // User functions required by the runtime
 __device__ void register_chares();
-__device__ void main();
+__device__ void main(int argc, char** argv, size_t* argvs);
 
 // Runtime functions that can be called by the user
 __device__ void exit();

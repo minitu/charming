@@ -22,7 +22,7 @@ __device__ void Hello::greet(void* arg) {
 }
 
 // Main
-__device__ void charm::main() {
+__device__ void charm::main(int argc, char** argv, size_t* argvs) {
   // Create and populate object that will become the basis of chares
   Hello my_obj;
 

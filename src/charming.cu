@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <string.h>
 #include <cuda.h>
 #include <mpi.h>
 #include <nvshmem.h>
@@ -39,6 +40,29 @@ int main(int argc, char* argv[]) {
   cudaSetDevice(0);
   cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
 
+  // Transfer command line arguments to GPU
+  size_t h_argvs[argc];
+  size_t argvs_total = 0;
+  for (int i = 0; i < argc; i++) {
+    h_argvs[i] = strlen(argv[i]);
+    argvs_total += h_argvs[i] + 1; // Include NULL character
+  }
+  size_t* d_argvs;
+  cudaMalloc(&d_argvs, sizeof(size_t) * argc);
+  cudaMemcpyAsync(d_argvs, h_argvs, sizeof(size_t) * argc, cudaMemcpyHostToDevice, stream);
+  char* d_argvv;
+  cudaMalloc(&d_argvv, argvs_total);
+  char* h_argv[argc];
+  h_argv[0] = d_argvv;
+  cudaMemcpyAsync(h_argv[0], argv[0], h_argvs[0] + 1, cudaMemcpyHostToDevice, stream);
+  for (int i = 1; i < argc; i++) {
+    h_argv[i] = h_argv[i-1] + h_argvs[i-1] + 1;
+    cudaMemcpyAsync(h_argv[i], argv[i], h_argvs[i] + 1, cudaMemcpyHostToDevice, stream);
+  }
+  char** d_argv;
+  cudaMalloc(&d_argv, sizeof(char*) * argc);
+  cudaMemcpyAsync(d_argv, h_argv, sizeof(char*) * argc, cudaMemcpyHostToDevice, stream);
+
   // Allocate message queue with NVSHMEM
   size_t h_rbuf_size = (1 << 28);
   mpsc_ringbuf_t* h_rbuf = mpsc_ringbuf_malloc(h_rbuf_size);
@@ -47,8 +71,8 @@ int main(int argc, char* argv[]) {
   nvshmem_barrier_all();
 
   // Launch scheduler
-  int grid_size = (argc > 1) ? atoi(argv[1]) : 1;
-  int block_size = (argc > 2) ? atoi(argv[2]) : 1;
+  int grid_size = 1;
+  int block_size = 1;
   //cudaDeviceSetLimit(cudaLimitStackSize, 16384);
   size_t stack_size;
   cudaDeviceGetLimit(&stack_size, cudaLimitStackSize);
@@ -68,7 +92,7 @@ int main(int argc, char* argv[]) {
       //scheduler_args, 0, stream);
       nullptr, 0, stream);
       */
-  scheduler<<<grid_size, block_size, 0, stream>>>();
+  scheduler<<<grid_size, block_size, 0, stream>>>(argc, d_argv, d_argvs);
   cuda_check_error();
   cudaStreamSynchronize(stream);
   //nvshmemx_barrier_all_on_stream(stream); // Hangs
