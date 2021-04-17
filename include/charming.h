@@ -14,8 +14,6 @@ __device__ void main();
 // Runtime functions that can be called by the user
 __device__ void exit();
 
-extern __device__ chare_proxy_base* chare_proxies[];
-
 }
 
 #endif

@@ -6,12 +6,12 @@ __device__ charm::chare_proxy<Bar>* bar_proxy;
 
 __device__ void charm::register_chares() {
   // Register chares and entry methods
-  charm::chare_proxies[0] = foo_proxy = new charm::chare_proxy<Foo>(0, 2);
+  foo_proxy = new charm::chare_proxy<Foo>(2);
   foo_proxy->add_entry_method(&Foo::hello);
   foo_proxy->add_entry_method(&Foo::morning);
 
   // Register Bar and its entry methods
-  charm::chare_proxies[1] = bar_proxy = new charm::chare_proxy<Bar>(1, 1);
+  bar_proxy = new charm::chare_proxy<Bar>(1);
   bar_proxy->add_entry_method(&Bar::hammer);
 }
 
@@ -56,16 +56,19 @@ __device__ void Bar::unpack(void* ptr) {
 
 // Main
 __device__ void charm::main() {
-  // Create and populate object that will become the basis of chares
-  Foo my_obj(1);
+  // Create and populate objects that will become the basis of chares
+  Foo my_foo(1);
+  Bar my_bar('c');
 
-  // Create Foo chares using the data in my object
-  foo_proxy->create(my_obj, 20);
+  // Create chares
+  foo_proxy->create(my_foo, 20);
+  bar_proxy->create(my_bar, 10);
 
-  // Invoke entry methods (chare index, entry method index, source buffer, buffer size)
-  foo_proxy->invoke(6 /* Chare index */, 0 /* Entry method index */);
+  // Invoke entry methods (chare index, entry method index, parameter buffer, size of buffer)
+  foo_proxy->invoke(6, 0);
   int a[2] = {10, 11};
   foo_proxy->invoke(11, 1, a, sizeof(int) * 2);
+  bar_proxy->invoke(9, 0);
 
   // Send termination messages to all PEs
   charm::exit();

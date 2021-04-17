@@ -4,12 +4,14 @@
 #include "ringbuf.h"
 #include "util.h"
 
-using namespace charm;
-
 extern __device__ mpsc_ringbuf_t* rbuf;
 extern __device__ size_t rbuf_size;
 extern __device__ spsc_ringbuf_t* mbuf;
 extern __device__ size_t mbuf_size;
+
+using namespace charm;
+
+extern __device__ chare_proxy_base* chare_proxies[];
 
 __device__ envelope* charm::create_envelope(msgtype type, size_t msg_size) {
   // Secure region in my message pool
@@ -147,6 +149,7 @@ __global__ void charm::scheduler() {
     int n_pes = nvshmem_n_pes();
 
     // Register user chares and entry methods on all PEs
+    chare_proxy_cnt = 0;
     register_chares();
 
     // Initialize message queue

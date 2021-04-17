@@ -18,7 +18,8 @@ __device__ size_t mbuf_size;
 
 using namespace charm;
 
-__device__ chare_proxy_base* charm::chare_proxies[CHARE_TYPE_CNT_MAX];
+__device__ chare_proxy_base* chare_proxies[CHARE_TYPE_CNT_MAX];
+__device__ int chare_proxy_cnt;
 
 int main(int argc, char* argv[]) {
   int rank;

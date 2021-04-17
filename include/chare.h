@@ -30,12 +30,19 @@ struct entry_method {
 struct chare_proxy_base {
   int id;
 
-  __device__ chare_proxy_base(int id_) : id(id_) {}
+  __device__ chare_proxy_base() {}
   __device__ virtual void alloc(int n_local, int n_total, int start_idx, int end_idx) = 0;
   __device__ virtual void store_loc_map(void* src) = 0;
   __device__ virtual void unpack(void* ptr, int idx) = 0;
   __device__ virtual void call(int idx, int ep, void* arg) = 0;
 };
+
+}; // namespace charm
+
+extern __device__ charm::chare_proxy_base* chare_proxies[];
+extern __device__ int chare_proxy_cnt;
+
+namespace charm {
 
 template <typename C>
 struct chare_proxy : chare_proxy_base {
@@ -48,9 +55,14 @@ struct chare_proxy : chare_proxy_base {
   int start_idx;
   int end_idx;
 
-  __device__ chare_proxy(int id_, int n_em)
-    : chare_proxy_base(id_), objects(nullptr), n_local(0), n_total(0), start_idx(-1),
-      end_idx(-1), entry_methods(nullptr), em_count(0) {
+  __device__ chare_proxy(int n_em)
+    : objects(nullptr), n_local(0), n_total(0), start_idx(-1), end_idx(-1),
+      entry_methods(nullptr), em_count(0) {
+    // Store this proxy for the runtime
+    id = chare_proxy_cnt;
+    chare_proxies[chare_proxy_cnt++] = this;
+
+    // Allocate space for entry methods
     entry_methods = new entry_method<C>*[n_em];
   }
 
@@ -180,6 +192,6 @@ struct chare_proxy : chare_proxy_base {
   }
 };
 
-}
+} // namespace charm
 
 #endif // _CHARE_H_
