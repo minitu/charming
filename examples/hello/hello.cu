@@ -5,7 +5,7 @@ __device__ charm::chare_proxy<Hello>* hello_proxy;
 
 __device__ void charm::register_chares() {
   // Register Hello chare and its entry methods
-  hello_proxy = new charm::chare_proxy<Hello>(0, 1);
+  hello_proxy = new charm::chare_proxy<Hello>(1);
   hello_proxy->add_entry_method(&Hello::greet);
 }
 
