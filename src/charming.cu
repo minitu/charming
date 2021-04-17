@@ -114,3 +114,11 @@ __device__ void charm::exit() {
     send_term_msg(pe);
   }
 }
+
+__device__ int charm::n_pes() {
+  return nvshmem_n_pes();
+}
+
+__device__ int charm::my_pe() {
+  return nvshmem_my_pe();
+}
