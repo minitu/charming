@@ -17,10 +17,10 @@ struct Foo : charm::chare {
 };
 
 struct Bar : charm::chare {
-  char ch;
+  char my_char;
 
   __device__ Bar() {}
-  __device__ Bar(char ch_) : ch(ch_) {}
+  __device__ Bar(char my_char_) : my_char(my_char_) {}
   __device__ void hammer(void* arg);
 
   __device__ size_t pack_size();

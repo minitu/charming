@@ -39,7 +39,7 @@ __device__ void Foo::unpack(void* ptr) {
 
 // Bar
 __device__ void Bar::hammer(void* arg) {
-  printf("Hammer!\n");
+  printf("Hammer! My char is %c\n", my_char);
 }
 
 __device__ size_t Bar::pack_size() {
@@ -47,11 +47,11 @@ __device__ size_t Bar::pack_size() {
 }
 
 __device__ void Bar::pack(void* ptr) {
-  *(char*)ptr = ch;
+  *(char*)ptr = my_char;
 }
 
 __device__ void Bar::unpack(void* ptr) {
-  ch = *(char*)ptr;
+  my_char = *(char*)ptr;
 }
 
 // Main
