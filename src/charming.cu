@@ -108,11 +108,15 @@ int main(int argc, char* argv[]) {
   return 0;
 }
 
-__device__ void charm::exit() {
+__device__ void charm::end() {
   int n_pes = nvshmem_n_pes();
   for (int pe = 0; pe < n_pes; pe++) {
     send_term_msg(pe);
   }
+}
+
+__device__ void charm::end(int pe) {
+  send_term_msg(pe);
 }
 
 __device__ int charm::n_pes() {
