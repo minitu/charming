@@ -6,9 +6,6 @@
 #define ALIGN_SIZE 16
 #define GHOST_SIZE 2
 
-#define LEFT 0
-#define RIGHT 1
-
 typedef double DataType;
 
 struct alignas(ALIGN_SIZE) Ghost {
@@ -30,12 +27,14 @@ struct Block : charm::chare {
   size_t ghost_size;
   Ghost* left_ghost;
   Ghost* right_ghost;
+  int neighbor_count;
   int recv_count;
 
   __device__ Block() {}
   __device__ void init(void* arg);
-  __device__ void send_ghosts(void* arg);
+  __device__ void send_ghosts();
   __device__ void recv_ghosts(void* arg);
+  __device__ void update();
 };
 
 #endif

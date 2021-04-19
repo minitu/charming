@@ -1,6 +1,11 @@
 #include <stdio.h>
 #include "jacobi1d.h"
 
+#define LEFT 0
+#define RIGHT 1
+
+#define BLOCK_WIDTH 134217728
+#define N_ITERS 100
 #define BLOCK_DIM 256
 
 __device__ charm::chare_proxy<Block>* block_proxy;
@@ -8,7 +13,6 @@ __device__ charm::chare_proxy<Block>* block_proxy;
 __device__ void charm::register_chares() {
   block_proxy = new charm::chare_proxy<Block>(1);
   block_proxy->add_entry_method(&Block::init);
-  block_proxy->add_entry_method(&Block::send_ghosts);
   block_proxy->add_entry_method(&Block::recv_ghosts);
 }
 
@@ -26,22 +30,26 @@ __global__ void init_kernel(DataType* temperature, DataType* new_temperature,
                             int block_width);
 __global__ void boundary_kernel(DataType* temperature, DataType* new_temperature,
                                 int block_width);
+__global__ void jacobi_kernel(DataType* temperature, DataType* new_temperature,
+                              int block_width);
 
 // Entry methods
 __device__ void Block::init(void* arg) {
-  index = charm::my_pe();
+  index = charm::chare::i;
   iter = 0;
-  block_width = 16;
+  block_width = BLOCK_WIDTH;
   data_size = block_width + GHOST_SIZE*2;
   temperature = new DataType[data_size];
   new_temperature = new DataType[data_size];
-  left_index = (index == 0) ? (charm::n_pes()-1) : (index-1);
-  right_index = (index == charm::n_pes()-1) ? 0 : (index+1);
+  left_index = (index == 0) ? -1 : (index-1);
+  right_index = (index == charm::n_pes()-1) ? -1 : (index+1);
   ghost_size = sizeof(DataType) * GHOST_SIZE;
   left_ghost = new Ghost(RIGHT);
   right_ghost = new Ghost(LEFT);
+  neighbor_count = 2;
+  if (index == 0) neighbor_count--;
+  if (index == charm::chare::n-1) neighbor_count--;
   recv_count = 0;
-  printf("Ghost bytes size: %d\n", sizeof(Ghost));
 
   dim3 block_dim(BLOCK_DIM);
   dim3 grid_dim((data_size + (block_dim.x-1)) / block_dim.x);
@@ -49,33 +57,54 @@ __device__ void Block::init(void* arg) {
   boundary_kernel<<<grid_dim, block_dim>>>(temperature, new_temperature, block_width);
   cudaDeviceSynchronize();
 
-  printf("PE %d initialized\n", charm::my_pe());
-  for (int i = 0; i < data_size; i++) {
-    printf("%.3lf ", temperature[i]);
-  }
-  printf("\n");
-  for (int i = 0; i < data_size; i++) {
-    printf("%.3lf ", new_temperature[i]);
-  }
-  printf("\n");
-
-  send_ghosts(nullptr);
+  send_ghosts();
 }
 
-__device__ void Block::send_ghosts(void* arg) {
-  memcpy(left_ghost->data, temperature, ghost_size);
-  memcpy(right_ghost->data, temperature + GHOST_SIZE + block_width, ghost_size);
-  block_proxy->invoke(left_index, 2, left_ghost, sizeof(Ghost));
-  block_proxy->invoke(right_index, 2, right_ghost, sizeof(Ghost));
+__device__ void Block::send_ghosts() {
+  if (left_index != -1) {
+    memcpy(left_ghost->data, temperature + GHOST_SIZE, ghost_size);
+    block_proxy->invoke(left_index, 1, left_ghost, sizeof(Ghost));
+  }
+  if (right_index != -1) {
+    memcpy(right_ghost->data, temperature + block_width, ghost_size);
+    block_proxy->invoke(right_index, 1, right_ghost, sizeof(Ghost));
+  }
 }
 
 __device__ void Block::recv_ghosts(void* arg) {
   Ghost* gh = (Ghost*)arg;
   int dir = gh->dir;
-  printf("PE %d received from %s, %.3lf %.3lf\n", charm::my_pe(), (dir == 0) ? "left" : "right", gh->data[0], gh->data[1]);
+  switch (dir) {
+    case LEFT:
+      memcpy(temperature, gh->data, ghost_size);
+      break;
+    case RIGHT:
+      memcpy(temperature + GHOST_SIZE + block_width, gh->data, ghost_size);
+      break;
+  }
 
-  if (++recv_count == 2) {
+  if (++recv_count == neighbor_count) {
+    recv_count = 0;
+    update();
+  }
+}
+
+__device__ void Block::update() {
+  dim3 block_dim(BLOCK_DIM);
+  dim3 grid_dim((data_size + (block_dim.x-1)) / block_dim.x);
+  jacobi_kernel<<<grid_dim, block_dim>>>(temperature, new_temperature, block_width);
+  cudaDeviceSynchronize();
+
+  if (++iter == N_ITERS) {
+    printf("Chare %d completed %d iterations\n", index, iter);
+
     charm::end(charm::my_pe());
+  } else {
+    DataType* tmp = temperature;
+    temperature = new_temperature;
+    new_temperature = tmp;
+
+    send_ghosts();
   }
 }
 
@@ -93,8 +122,8 @@ __global__ void boundary_kernel(DataType* temperature, DataType* new_temperature
                                 int block_width) {
   int i = blockDim.x * blockIdx.x + threadIdx.x;
   if (i < GHOST_SIZE || (i >= GHOST_SIZE + block_width && i < block_width + GHOST_SIZE*2)) {
-    temperature[i] = 1;
-    new_temperature[i] = 1;
+    temperature[i] = 10;
+    new_temperature[i] = 10;
   }
 }
 
@@ -102,6 +131,10 @@ __global__ void jacobi_kernel(DataType* temperature, DataType* new_temperature,
                               int block_width) {
   int i = blockDim.x * blockIdx.x + threadIdx.x;
   if (i >= GHOST_SIZE && i < block_width + GHOST_SIZE) {
-    // TODO
+    DataType sum = 0;
+    for (int j = -GHOST_SIZE; j <= GHOST_SIZE; j++) {
+      sum += temperature[i+j];
+    }
+    new_temperature[i] = sum / (1 + GHOST_SIZE*2);
   }
 }

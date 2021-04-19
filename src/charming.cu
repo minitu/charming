@@ -74,13 +74,18 @@ int main(int argc, char* argv[]) {
   int grid_size = 1;
   int block_size = 1;
   //cudaDeviceSetLimit(cudaLimitStackSize, 16384);
-  size_t stack_size;
+  size_t stack_size, heap_size;
+  size_t new_heap_size = 8589934592; // Set heap max to 8GB
   cudaDeviceGetLimit(&stack_size, cudaLimitStackSize);
+  cudaDeviceSetLimit(cudaLimitMallocHeapSize, new_heap_size);
+  cudaDeviceGetLimit(&heap_size, cudaLimitMallocHeapSize);
   cudaDeviceProp prop;
   cudaGetDeviceProperties(&prop, 0);
   if (!rank) {
-    printf("CHARMING\nGrid size: %d\nBlock size: %d\nStack size: %llu\nClock rate: %.2lf GHz\n",
-           grid_size, block_size, stack_size, (double)prop.clockRate / 1e6);
+    printf("CHARMING\nGrid size: %d\nBlock size: %d\nStack size: %llu\n"
+           "Heap size: %llu\nClock rate: %.2lf GHz\n",
+           grid_size, block_size, stack_size, heap_size,
+           (double)prop.clockRate / 1e6);
   }
   //void* scheduler_args[4] = { &rbuf, &rbuf_size, &mbuf, &mbuf_size };
   cudaMemcpyToSymbolAsync(rbuf, &h_rbuf, sizeof(mpsc_ringbuf_t*), 0, cudaMemcpyHostToDevice, stream);
