@@ -2,6 +2,7 @@
 #define _JACOBI1D_H_
 
 #include <charming.h>
+#include <cuda/std/chrono>
 
 #define ALIGN_SIZE 16
 #define GHOST_SIZE 2
@@ -17,8 +18,9 @@ struct alignas(ALIGN_SIZE) Ghost {
 
 struct Block : charm::chare {
   int index;
-  int iter;
   int block_width;
+  int iter;
+  int n_iters;
   int data_size;
   DataType* temperature;
   DataType* new_temperature;
@@ -29,6 +31,8 @@ struct Block : charm::chare {
   Ghost* right_ghost;
   int neighbor_count;
   int recv_count;
+  cuda::std::chrono::time_point<cuda::std::chrono::system_clock> start_tp;
+  cuda::std::chrono::time_point<cuda::std::chrono::system_clock> end_tp;
 
   __device__ Block() {}
   __device__ void init(void* arg);
