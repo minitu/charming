@@ -163,7 +163,7 @@ __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
       main(argc, argv, argvs);
     }
 
-    nvshmem_barrier_all();
+    nvshmem_barrier_all(); // FIXME: No need?
 
     // Receive messages and terminate
     do {

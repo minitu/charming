@@ -11,7 +11,7 @@
 __device__ charm::chare_proxy<Block>* block_proxy;
 
 __device__ void charm::register_chares() {
-  block_proxy = new charm::chare_proxy<Block>(1);
+  block_proxy = new charm::chare_proxy<Block>(2);
   block_proxy->add_entry_method(&Block::init);
   block_proxy->add_entry_method(&Block::recv_ghosts);
 }
