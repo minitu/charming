@@ -1,4 +1,4 @@
-TARGET = jacobi1d
+TARGET = jacobi2d
 
 CHARMING_HOME = ../..
 NVSHMEM_HOME ?= $(HOME)/nvshmem_src_2.0.3-0/install
