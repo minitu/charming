@@ -25,7 +25,7 @@ struct Block : charm::chare {
 
   DataType* temperature;
   DataType* new_temperature;
-  DataType* ghosts[N_NEIGHBORS];
+  DataType* boundaries[N_NEIGHBORS];
   size_t ghost_sizes[N_NEIGHBORS];
 
   cuda::std::chrono::time_point<cuda::std::chrono::system_clock> start_tp;
@@ -33,7 +33,7 @@ struct Block : charm::chare {
 
   __device__ Block() {}
   __device__ void init(void* arg);
-  __device__ void send_ghosts();
+  __device__ void send_boundaries();
   __device__ void recv_ghosts(void* arg);
   __device__ void update();
 };

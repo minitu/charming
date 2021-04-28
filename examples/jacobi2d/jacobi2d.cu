@@ -50,7 +50,7 @@ __device__ void charm::main(int argc, char** argv, size_t* argvs) {
   int sqrt_n = (int)sqrt((float)n_chares);
   if (sqrt_n * sqrt_n != n_chares) {
     printf("Number of chares (PEs) %d should be a square number!\n", n_chares);
-    return;
+    charm::end();
   }
 
   Block block;
@@ -115,8 +115,8 @@ __device__ void Block::init(void* arg) {
   ghost_sizes[TOP] = sizeof(DataType) * block_width;
   ghost_sizes[BOTTOM] = sizeof(DataType) * block_width;
   for (int i = 0; i < N_NEIGHBORS; i++) {
-    ghosts[i] = new DataType[ghost_sizes[i] / sizeof(DataType) + 1]; // Need int for direction
-    *(int*)ghosts[i] = (i % 2 == 0) ? (i+1) : (i-1);
+    boundaries[i] = new DataType[ghost_sizes[i] / sizeof(DataType) + 1]; // Need int for direction
+    *(int*)boundaries[i] = (i % 2 == 0) ? (i+1) : (i-1);
   }
 
   dim3 block_dim(BLOCK_DIM, BLOCK_DIM);
@@ -125,42 +125,42 @@ __device__ void Block::init(void* arg) {
   cudaDeviceSynchronize();
 
   start_tp = cuda::std::chrono::system_clock::now();
-  send_ghosts();
+  send_boundaries();
 }
 
-__device__ void Block::send_ghosts() {
+__device__ void Block::send_boundaries() {
   // Pack
   dim3 block_dim(BLOCK_DIM * BLOCK_DIM);
   dim3 grid_dim((block_height + block_dim.x - 1) / block_dim.x);
   if (neighbor_index[LEFT] != -1) {
-    DataType* ghost = ghosts[LEFT]+1;
-    pack_left_kernel<<<grid_dim, block_dim>>>(temperature, ghost, block_width, block_height);
+    DataType* boundary = boundaries[LEFT]+1;
+    pack_left_kernel<<<grid_dim, block_dim>>>(temperature, boundary, block_width, block_height);
   }
   if (neighbor_index[RIGHT] != -1) {
-    DataType* ghost = ghosts[RIGHT]+1;
-    pack_right_kernel<<<grid_dim, block_dim>>>(temperature, ghost, block_width, block_height);
+    DataType* boundary = boundaries[RIGHT]+1;
+    pack_right_kernel<<<grid_dim, block_dim>>>(temperature, boundary, block_width, block_height);
   }
   cudaDeviceSynchronize();
 
   // Send to neighbors
   if (neighbor_index[LEFT] != -1) {
-    block_proxy->invoke(neighbor_index[LEFT], 1, ghosts[LEFT],
+    block_proxy->invoke(neighbor_index[LEFT], 1, boundaries[LEFT],
                         sizeof(DataType) + ghost_sizes[LEFT]);
   }
   if (neighbor_index[RIGHT] != -1) {
-    block_proxy->invoke(neighbor_index[RIGHT], 1, ghosts[RIGHT],
+    block_proxy->invoke(neighbor_index[RIGHT], 1, boundaries[RIGHT],
                         sizeof(DataType) + ghost_sizes[RIGHT]);
   }
   if (neighbor_index[TOP] != -1) {
-    memcpy(ghosts[TOP]+1,
+    memcpy(boundaries[TOP]+1,
            temperature + (block_width+2) + 1, ghost_sizes[TOP]);
-    block_proxy->invoke(neighbor_index[TOP], 1, ghosts[TOP],
+    block_proxy->invoke(neighbor_index[TOP], 1, boundaries[TOP],
                         sizeof(DataType) + ghost_sizes[TOP]);
   }
   if (neighbor_index[BOTTOM] != -1) {
-    memcpy(ghosts[BOTTOM]+1,
+    memcpy(boundaries[BOTTOM]+1,
            temperature + (block_width+2) * block_height + 1, ghost_sizes[BOTTOM]);
-    block_proxy->invoke(neighbor_index[BOTTOM], 1, ghosts[BOTTOM],
+    block_proxy->invoke(neighbor_index[BOTTOM], 1, boundaries[BOTTOM],
                         sizeof(DataType) + ghost_sizes[BOTTOM]);
   }
 }
@@ -232,7 +232,7 @@ __device__ void Block::update() {
     temperature = new_temperature;
     new_temperature = tmp;
 
-    send_ghosts();
+    send_boundaries();
   }
 }
 
