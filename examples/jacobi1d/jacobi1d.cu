@@ -128,7 +128,7 @@ __device__ void Block::update() {
     cuda::std::chrono::duration<double> diff = end_tp - start_tp;
     printf("Chare %d completed %d iterations in %.6lf seconds\n", index, iter, diff.count());
 
-    charm::end(charm::my_pe());
+    charm::end();
   } else {
     DataType* tmp = temperature;
     temperature = new_temperature;

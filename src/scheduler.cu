@@ -65,14 +65,22 @@ __device__ void charm::send_reg_msg(int chare_id, int chare_idx, int ep_id,
   send_msg(env, msg_size, dst_pe);
 }
 
-__device__ void charm::send_term_msg(int dst_pe) {
+__device__ void charm::send_begin_term_msg(int dst_pe) {
   size_t msg_size = envelope::alloc_size(0);
-  envelope* env = create_envelope(msgtype::terminate, msg_size);
+  envelope* env = create_envelope(msgtype::begin_terminate, msg_size);
 
   send_msg(env, msg_size, dst_pe);
 }
 
-__device__ __forceinline__ ssize_t next_msg(void* addr, bool& term_flag) {
+__device__ void charm::send_do_term_msg(int dst_pe) {
+  size_t msg_size = envelope::alloc_size(0);
+  envelope* env = create_envelope(msgtype::do_terminate, msg_size);
+
+  send_msg(env, msg_size, dst_pe);
+}
+
+__device__ __forceinline__ ssize_t next_msg(void* addr, bool& begin_term_flag,
+                                            bool& do_term_flag) {
   static int dummy_cnt = 0;
   static clock_value_t start;
   static clock_value_t end;
@@ -116,25 +124,38 @@ __device__ __forceinline__ ssize_t next_msg(void* addr, bool& term_flag) {
     void* payload = (char*)msg + sizeof(regular_msg);
     // TODO: Copy payload?
     chare_proxy->call(msg->chare_idx, msg->ep_id, payload);
-  } else if (env->type == msgtype::terminate) {
-    // Termination message
+  } else if (env->type == msgtype::begin_terminate) {
+    // Should only be received by PE 0
+    assert(my_pe() == 0);
+    // Begin termination message
 #ifdef DEBUG
-    printf("PE %d terminate msg\n", nvshmem_my_pe());
+    printf("PE %d begin terminate msg\n", nvshmem_my_pe());
 #endif
-    term_flag = true;
+    if (!begin_term_flag) {
+      for (int i = 0; i < n_pes(); i++) {
+        send_do_term_msg(i);
+      }
+      begin_term_flag = true;
+    }
+  } else if (env->type == msgtype::do_terminate) {
+    // Do termination message
+#ifdef DEBUG
+    printf("PE %d do terminate msg\n", nvshmem_my_pe());
+#endif
+    do_term_flag = true;
   }
 
   return env->size;
 }
 
-__device__ __forceinline__ void recv_msg(bool &term_flag) {
+__device__ __forceinline__ void recv_msg(bool& begin_term_flag, bool &do_term_flag) {
   size_t len, off;
   if ((len = mpsc_ringbuf_consume(rbuf, &off)) != 0) {
     // Retrieved a contiguous range, there could be multiple messages
     size_t rem = len;
     ssize_t ret;
     while (rem) {
-      ret = next_msg(rbuf->addr(off), term_flag);
+      ret = next_msg(rbuf->addr(off), begin_term_flag, do_term_flag);
       off += ret;
       rem -= ret;
     }
@@ -144,7 +165,8 @@ __device__ __forceinline__ void recv_msg(bool &term_flag) {
 
 __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
   if (!blockIdx.x && !threadIdx.x) {
-    bool term_flag = false;
+    bool begin_term_flag = false;
+    bool do_term_flag = false;
     int my_pe = nvshmem_my_pe();
     int n_pes = nvshmem_n_pes();
 
@@ -167,7 +189,7 @@ __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
 
     // Receive messages and terminate
     do {
-      recv_msg(term_flag);
-    } while(!term_flag);
+      recv_msg(begin_term_flag, do_term_flag);
+    } while (!do_term_flag);
   }
 }

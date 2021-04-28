@@ -114,14 +114,8 @@ int main(int argc, char* argv[]) {
 }
 
 __device__ void charm::end() {
-  int n_pes = nvshmem_n_pes();
-  for (int pe = 0; pe < n_pes; pe++) {
-    send_term_msg(pe);
-  }
-}
-
-__device__ void charm::end(int pe) {
-  send_term_msg(pe);
+  // TODO: Check if begin_terminate message has already been sent from this PE
+  send_begin_term_msg(0);
 }
 
 __device__ int charm::n_pes() {

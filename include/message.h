@@ -9,7 +9,8 @@ enum class msgtype {
   dummy,
   regular,
   create,
-  terminate
+  begin_terminate,
+  do_terminate
 };
 
 // TODO: Is alignment too aggressive? Otherwise we observe segfaults

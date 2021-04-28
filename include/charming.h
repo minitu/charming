@@ -13,7 +13,6 @@ __device__ void main(int argc, char** argv, size_t* argvs);
 
 // Runtime functions that can be called by the user
 __device__ void end();
-__device__ void end(int pe);
 __device__ int n_pes();
 __device__ int my_pe();
 
