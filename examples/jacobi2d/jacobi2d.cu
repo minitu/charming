@@ -84,7 +84,7 @@ __device__ void charm::main(int argc, char** argv, size_t* argvs) {
   block_proxy->create(block, n_chares);
   constexpr int n_params = 5;
   int params[n_params] = { block_width, block_height, n_iters, n_chares_x, n_chares_y };
-  for (int i = 0; i < charm::n_pes(); i++) {
+  for (int i = 0; i < n_chares; i++) {
     block_proxy->invoke(i, 0, params, sizeof(int) * n_params);
   }
 }
