@@ -10,7 +10,6 @@
 typedef double DataType;
 
 struct Block : charm::chare {
-  int sqrt_n;
   int row;
   int col;
   int neighbor_index[N_NEIGHBORS];

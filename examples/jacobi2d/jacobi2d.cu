@@ -8,7 +8,7 @@
 
 #define GRID_WIDTH 65536
 #define GRID_HEIGHT 65536
-#define N_ITERS 1000
+#define N_ITERS 100
 #define BLOCK_DIM 16
 
 #define IDX(i,j) ((block_width+2)*(i) + (j))
@@ -46,29 +46,44 @@ __device__ void charm::main(int argc, char** argv, size_t* argvs) {
   if (argc >= 5) n_iters = device_atoi(argv[4], argvs[4]);
 
   // Set up 2D grid of chares (as square as possible)
-  double area[2];
+  double area[2], surf, bestsurf;
+  int ipx, ipy;
+  int n_chares_x, n_chares_y;
   area[0] = grid_height;
   area[1] = grid_width;
   bestsurf = 2.0 * (area[0] + area[1]);
   ipx = 1;
   while (ipx <= n_chares) {
+    if (n_chares % ipx == 0) {
+      ipy = n_chares / ipx;
+      surf = 2.0 * (area[0] / ipx + area[1] / ipy);
 
+      if (surf < bestsurf) {
+        bestsurf = surf;
+        n_chares_x = ipx;
+        n_chares_y = ipy;
+      }
+    }
+    ipx++;
   }
-
-  printf("Setting grid size: %d x %d\n", grid_width, grid_height);
-  printf("Setting total number of iterations: %d\n", n_iters);
-
-  int n_chares = charm::n_pes();
-  int sqrt_n = (int)sqrt((float)n_chares);
-  if (sqrt_n * sqrt_n != n_chares) {
-    printf("Number of chares (PEs) %d should be a square number!\n", n_chares);
+  if (n_chares_x * n_chares_y != n_chares) {
+    printf("Decomposition failed! %d chares into %d x %d chares\n",
+           n_chares, n_chares_x, n_chares_y);
     charm::end();
   }
 
+  int block_width = grid_width / n_chares_x;
+  int block_height = grid_height / n_chares_y;
+
+  printf("Grid size: %d x %d\n", grid_width, grid_height);
+  printf("Block size: %d x %d\n", block_width, block_height);
+  printf("Chare array: %d x %d (%d total)\n", n_chares_x, n_chares_y, n_chares);
+  printf("Total number of iterations: %d\n", n_iters);
+
   Block block;
   block_proxy->create(block, n_chares);
-  constexpr int n_params = 4;
-  int params[n_params] = { block_width, block_height, n_iters, sqrt_n };
+  constexpr int n_params = 5;
+  int params[n_params] = { block_width, block_height, n_iters, n_chares_x, n_chares_y };
   for (int i = 0; i < charm::n_pes(); i++) {
     block_proxy->invoke(i, 0, params, sizeof(int) * n_params);
   }
@@ -100,19 +115,20 @@ __device__ void Block::init(void* arg) {
   iter = 0;
 
   // Figure out this block's index and its neighbors
-  sqrt_n = params[param_idx++];
+  int n_chares_x = params[param_idx++];
+  int n_chares_y = params[param_idx++];
   int index = charm::chare::i;
-  row = (index / sqrt_n);
-  col = (index % sqrt_n);
+  row = (index / n_chares_y);
+  col = (index % n_chares_y);
   neighbor_index[LEFT] = (col == 0) ? -1 : (index-1);
-  neighbor_index[RIGHT] = (col == sqrt_n-1) ? -1 : (index+1);
-  neighbor_index[TOP] = (row == 0) ? -1 : (index-sqrt_n);
-  neighbor_index[BOTTOM] = (row == sqrt_n-1) ? -1 : (index+sqrt_n);
+  neighbor_index[RIGHT] = (col == n_chares_y-1) ? -1 : (index+1);
+  neighbor_index[TOP] = (row == 0) ? -1 : (index-n_chares_y);
+  neighbor_index[BOTTOM] = (row == n_chares_x-1) ? -1 : (index+n_chares_y);
   neighbor_count = 4;
   if (col == 0) neighbor_count--;
-  if (col == sqrt_n-1) neighbor_count--;
+  if (col == n_chares_y-1) neighbor_count--;
   if (row == 0) neighbor_count--;
-  if (row == sqrt_n-1) neighbor_count--;
+  if (row == n_chares_x-1) neighbor_count--;
   recv_count = 0;
 
   /*
