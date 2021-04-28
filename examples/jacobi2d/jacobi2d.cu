@@ -6,8 +6,8 @@
 #define TOP 2
 #define BOTTOM 3
 
-#define BLOCK_WIDTH 65536
-#define BLOCK_HEIGHT 65536
+#define GRID_WIDTH 65536
+#define GRID_HEIGHT 65536
 #define N_ITERS 1000
 #define BLOCK_DIM 16
 
@@ -36,14 +36,26 @@ __device__ int device_atoi(const char* str, int strlen) {
 // Main
 __device__ void charm::main(int argc, char** argv, size_t* argvs) {
   // Process command line arguments
-  int block_width = BLOCK_WIDTH;
-  if (argc >= 2) block_width = device_atoi(argv[1], argvs[1]);
-  int block_height = BLOCK_HEIGHT;
-  if (argc >= 3) block_height = device_atoi(argv[2], argvs[2]);
+  int grid_width = GRID_WIDTH;
+  if (argc >= 2) grid_width = device_atoi(argv[1], argvs[1]);
+  int grid_height = GRID_HEIGHT;
+  if (argc >= 3) grid_height = device_atoi(argv[2], argvs[2]);
+  int n_chares = charm::n_pes();
+  if (argc >= 4) n_chares = device_atoi(argv[3], argvs[3]);
   int n_iters = N_ITERS;
-  if (argc >= 4) n_iters = device_atoi(argv[3], argvs[3]);
+  if (argc >= 5) n_iters = device_atoi(argv[4], argvs[4]);
 
-  printf("Setting block size: %d x %d\n", block_width, block_height);
+  // Set up 2D grid of chares (as square as possible)
+  double area[2];
+  area[0] = grid_height;
+  area[1] = grid_width;
+  bestsurf = 2.0 * (area[0] + area[1]);
+  ipx = 1;
+  while (ipx <= n_chares) {
+
+  }
+
+  printf("Setting grid size: %d x %d\n", grid_width, grid_height);
   printf("Setting total number of iterations: %d\n", n_iters);
 
   int n_chares = charm::n_pes();
