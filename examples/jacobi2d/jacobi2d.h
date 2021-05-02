@@ -15,6 +15,7 @@ struct Block : charm::chare {
   int neighbor_index[N_NEIGHBORS];
   int neighbor_count;
   int recv_count;
+  int end_count;
 
   int block_width;
   int block_height;
@@ -35,6 +36,7 @@ struct Block : charm::chare {
   __device__ void send_boundaries();
   __device__ void recv_ghosts(void* arg);
   __device__ void update();
+  __device__ void end(void* arg);
 };
 
 #endif

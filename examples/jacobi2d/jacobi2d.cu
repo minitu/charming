@@ -16,9 +16,10 @@
 __device__ charm::chare_proxy<Block>* block_proxy;
 
 __device__ void charm::register_chares() {
-  block_proxy = new charm::chare_proxy<Block>(2);
+  block_proxy = new charm::chare_proxy<Block>(3);
   block_proxy->add_entry_method(&Block::init);
   block_proxy->add_entry_method(&Block::recv_ghosts);
+  block_proxy->add_entry_method(&Block::end);
 }
 
 // Main
@@ -116,6 +117,7 @@ __device__ void Block::init(void* arg) {
   if (row == 0) neighbor_count--;
   if (row == n_chares_x-1) neighbor_count--;
   recv_count = 0;
+  end_count = 0;
 
   /*
   printf("%d: I'm (%d,%d) with %d neighbors\n", index, row, col, neighbor_count);
@@ -240,13 +242,20 @@ __device__ void Block::update() {
     cuda::std::chrono::duration<double> diff = end_tp - start_tp;
     printf("Chare (%d,%d) completed %d iterations in %.6lf seconds\n", row, col, iter, diff.count());
 
-    charm::end();
+    block_proxy->invoke(0, 2);
   } else {
     DataType* tmp = temperature;
     temperature = new_temperature;
     new_temperature = tmp;
 
     send_boundaries();
+  }
+}
+
+__device__ void Block::end(void* arg) {
+  if (++end_count == charm::chare::n) {
+    printf("Received %d end requests, terminating...\n", end_count);
+    charm::end();
   }
 }
 
