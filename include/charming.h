@@ -15,6 +15,7 @@ __device__ void main(int argc, char** argv, size_t* argvs);
 __device__ void end();
 __device__ int n_pes();
 __device__ int my_pe();
+__device__ int device_atoi(const char* str, int strlen);
 
 }
 

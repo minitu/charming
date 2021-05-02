@@ -125,3 +125,15 @@ __device__ int charm::n_pes() {
 __device__ int charm::my_pe() {
   return nvshmem_my_pe();
 }
+
+__device__ int charm::device_atoi(const char* str, int strlen) {
+  int tmp = 0;
+  for (int i = 0; i < strlen; i++) {
+    int multiplier = 1;
+    for (int j = 0; j < strlen - i - 1; j++) {
+      multiplier *= 10;
+    }
+    tmp += (str[i] - 48) * multiplier;
+  }
+  return tmp;
+}

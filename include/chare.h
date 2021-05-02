@@ -183,11 +183,13 @@ struct chare_proxy : chare_proxy_base {
   // Note: Chare should have been already created at this PE via a creation message
   inline __device__ void invoke(int idx, int ep) { invoke(idx, ep, nullptr, 0); }
   __device__ void invoke(int idx, int ep, void* buf, size_t size) {
-    if (idx == -1) {
-      // TODO: Broadcast to all chares
-    } else {
-      // Send a regular message to the target PE
-      send_reg_msg(id, idx, ep, buf, size, loc_map[idx]);
+    // Send a regular message to the target PE
+    send_reg_msg(id, idx, ep, buf, size, loc_map[idx]);
+  }
+  inline __device__ void invoke_all(int ep) { invoke_all(ep, nullptr, 0); }
+  inline __device__ void invoke_all(int ep, void* buf, size_t size) {
+    for (int i = 0; i < n_total; i++) {
+      invoke(i, ep, buf, size);
     }
   }
 };

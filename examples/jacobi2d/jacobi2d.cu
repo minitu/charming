@@ -21,29 +21,17 @@ __device__ void charm::register_chares() {
   block_proxy->add_entry_method(&Block::recv_ghosts);
 }
 
-__device__ int device_atoi(const char* str, int strlen) {
-  int tmp = 0;
-  for (int i = 0; i < strlen; i++) {
-    int multiplier = 1;
-    for (int j = 0; j < strlen - i - 1; j++) {
-      multiplier *= 10;
-    }
-    tmp += (str[i] - 48) * multiplier;
-  }
-  return tmp;
-}
-
 // Main
 __device__ void charm::main(int argc, char** argv, size_t* argvs) {
   // Process command line arguments
   int grid_width = GRID_WIDTH;
-  if (argc >= 2) grid_width = device_atoi(argv[1], argvs[1]);
+  if (argc >= 2) grid_width = charm::device_atoi(argv[1], argvs[1]);
   int grid_height = GRID_HEIGHT;
-  if (argc >= 3) grid_height = device_atoi(argv[2], argvs[2]);
+  if (argc >= 3) grid_height = charm::device_atoi(argv[2], argvs[2]);
   int n_chares = charm::n_pes();
-  if (argc >= 4) n_chares = device_atoi(argv[3], argvs[3]);
+  if (argc >= 4) n_chares = charm::device_atoi(argv[3], argvs[3]);
   int n_iters = N_ITERS;
-  if (argc >= 5) n_iters = device_atoi(argv[4], argvs[4]);
+  if (argc >= 5) n_iters = charm::device_atoi(argv[4], argvs[4]);
 
   // Set up 2D grid of chares (as square as possible)
   double area[2], surf, bestsurf;
@@ -84,9 +72,7 @@ __device__ void charm::main(int argc, char** argv, size_t* argvs) {
   block_proxy->create(block, n_chares);
   constexpr int n_params = 5;
   int params[n_params] = { block_width, block_height, n_iters, n_chares_x, n_chares_y };
-  for (int i = 0; i < n_chares; i++) {
-    block_proxy->invoke(i, 0, params, sizeof(int) * n_params);
-  }
+  block_proxy->invoke_all(0, params, sizeof(int) * n_params);
 }
 
 __global__ void init_kernel(DataType* temperature, DataType* new_temperature,
