@@ -111,7 +111,7 @@ __device__ void Block::init(void* arg) {
   neighbor_index[RIGHT] = (col == n_chares_y-1) ? -1 : (index+1);
   neighbor_index[TOP] = (row == 0) ? -1 : (index-n_chares_y);
   neighbor_index[BOTTOM] = (row == n_chares_x-1) ? -1 : (index+n_chares_y);
-  neighbor_count = 4;
+  neighbor_count = N_NEIGHBORS;
   if (col == 0) neighbor_count--;
   if (col == n_chares_y-1) neighbor_count--;
   if (row == 0) neighbor_count--;
