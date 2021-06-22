@@ -119,6 +119,11 @@ __device__ void Block::init(void* arg) {
   recv_count = 0;
   end_count = 0;
 
+  send1_time = 0;
+  send2_time = 0;
+  recv_time = 0;
+  update_time = 0;
+
   /*
   printf("%d: I'm (%d,%d) with %d neighbors\n", index, row, col, neighbor_count);
   printf("LEFT: %d, RIGHT: %d, TOP: %d, BOTTOM: %d\n", neighbor_index[LEFT], neighbor_index[RIGHT], neighbor_index[TOP], neighbor_index[BOTTOM]);
@@ -145,6 +150,7 @@ __device__ void Block::init(void* arg) {
 }
 
 __device__ void Block::send_boundaries() {
+  send1_tp = cuda::std::chrono::system_clock::now();
   // Pack
   dim3 block_dim(BLOCK_DIM * BLOCK_DIM);
   dim3 grid_dim((block_height + block_dim.x - 1) / block_dim.x);
@@ -157,6 +163,9 @@ __device__ void Block::send_boundaries() {
     pack_right_kernel<<<grid_dim, block_dim>>>(temperature, boundary, block_width, block_height);
   }
   cudaDeviceSynchronize();
+  send2_tp = cuda::std::chrono::system_clock::now();
+  temp_diff = send2_tp - send1_tp;
+  send1_time += temp_diff.count();
 
   // Send to neighbors
   if (neighbor_index[LEFT] != -1) {
@@ -179,6 +188,9 @@ __device__ void Block::send_boundaries() {
     block_proxy->invoke(neighbor_index[BOTTOM], 1, boundaries[BOTTOM],
                         sizeof(DataType) + ghost_sizes[BOTTOM]);
   }
+  send_end_tp = cuda::std::chrono::system_clock::now();
+  temp_diff = send_end_tp - send2_tp;
+  send2_time += temp_diff.count();
 }
 
 __device__ void Block::recv_ghosts(void* arg) {
@@ -209,6 +221,9 @@ __device__ void Block::recv_ghosts(void* arg) {
 
   if (++recv_count == neighbor_count) {
     recv_count = 0;
+    recv_end_tp = cuda::std::chrono::system_clock::now();
+    temp_diff = recv_end_tp - send_end_tp;
+    recv_time += temp_diff.count();
     update();
   }
 }
@@ -218,6 +233,9 @@ __device__ void Block::update() {
   dim3 grid_dim((block_height + (block_dim.x-1)) / block_dim.x, (block_width + (block_dim.y-1)) / block_dim.y);
   jacobi_kernel<<<grid_dim, block_dim>>>(temperature, new_temperature, block_width, block_height);
   cudaDeviceSynchronize();
+  update_end_tp = cuda::std::chrono::system_clock::now();
+  temp_diff = update_end_tp - recv_end_tp;
+  update_time += temp_diff.count();
 
   /*
   printf("OLD\n");
@@ -239,8 +257,9 @@ __device__ void Block::update() {
 
   if (++iter == n_iters) {
     end_tp = cuda::std::chrono::system_clock::now();
-    cuda::std::chrono::duration<double> diff = end_tp - start_tp;
-    printf("Chare (%d,%d) completed %d iterations in %.6lf seconds\n", row, col, iter, diff.count());
+    temp_diff = end_tp - start_tp;
+    printf("Chare (%d,%d) total %.6lf s, send1 %.6lf s, send2 %.6lf s, recv %.6lf s, update %.6lf s\n", row, col,
+        temp_diff.count(), send1_time, send2_time, recv_time, update_time);
 
     block_proxy->invoke(0, 2);
   } else {

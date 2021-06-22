@@ -30,6 +30,16 @@ struct Block : charm::chare {
 
   cuda::std::chrono::time_point<cuda::std::chrono::system_clock> start_tp;
   cuda::std::chrono::time_point<cuda::std::chrono::system_clock> end_tp;
+  cuda::std::chrono::time_point<cuda::std::chrono::system_clock> send1_tp;
+  cuda::std::chrono::time_point<cuda::std::chrono::system_clock> send2_tp;
+  cuda::std::chrono::time_point<cuda::std::chrono::system_clock> send_end_tp;
+  cuda::std::chrono::time_point<cuda::std::chrono::system_clock> recv_end_tp;
+  cuda::std::chrono::time_point<cuda::std::chrono::system_clock> update_end_tp;
+  cuda::std::chrono::duration<double> temp_diff;
+  double send1_time;
+  double send2_time;
+  double recv_time;
+  double update_time;
 
   __device__ Block() {}
   __device__ void init(void* arg);
