@@ -19,6 +19,6 @@ export LD_LIBRARY_PATH=/sw/summit/gdrcopy/2.0/lib64:$LD_LIBRARY_PATH
 
 date
 
-jsrun -n$n_procs -a1 -c1 -g1 -r6 ./jacobi2d-bench $block_width $block_height $n_iters
+jsrun -n$n_procs -a1 -c1 -g1 -r6 ./jacobi2d-bench $block_width $block_height $n_procs $n_iters
 
 date
