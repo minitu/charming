@@ -1,11 +1,17 @@
 #include "scheduler.h"
 #include "charming.h"
 #include "chare.h"
+#include "msg_queue.h"
 #include "ringbuf.h"
 #include "util.h"
 
+/*
 extern __device__ mpsc_ringbuf_t* rbuf;
 extern __device__ size_t rbuf_size;
+*/
+extern __device__ MsgQueueMetaShell* local_meta_shell;
+extern __device__ MsgQueueMetaShell* remote_meta_shell;
+extern __device__ MsgQueueShell* msg_queue_shell;
 extern __device__ spsc_ringbuf_t* mbuf;
 extern __device__ size_t mbuf_size;
 
@@ -25,8 +31,10 @@ __device__ envelope* charm::create_envelope(msgtype type, size_t msg_size) {
 }
 
 __device__ void charm::send_msg(envelope* env, size_t msg_size, int dst_pe) {
+  int my_pe = nvshmem_my_pe();
   spsc_ringbuf_produce(mbuf);
 
+  /*
   // Secure region in destination PE's message queue
   ringbuf_off_t rret;
   while ((rret = mpsc_ringbuf_acquire(rbuf, msg_size, dst_pe)) == -1) {}
@@ -36,6 +44,54 @@ __device__ void charm::send_msg(envelope* env, size_t msg_size, int dst_pe) {
   nvshmem_char_put((char*)rbuf->addr(rret), (char*)env, env->size, dst_pe);
   nvshmem_quiet();
   mpsc_ringbuf_produce(rbuf, dst_pe);
+  */
+
+  // Retrieve symmetric addresses for metadata
+  MsgQueueMeta* remote_meta = remote_meta_shell[dst_pe].meta;
+  MsgQueueMeta* local_meta = local_meta_shell[my_pe].meta;
+
+  // Determine offset in destination PE's msg queue
+  offset_t avail;
+  offset_t target = -1;
+  offset_t read = nvshmem_longlong_atomic_fetch(&remote_meta->read, my_pe);
+  if (remote_meta->write >= read) {
+    avail = remote_meta->watermark - remote_meta->write;
+    if (avail < msg_size) {
+      // Not enough space, check front
+      avail = read;
+      if (avail < msg_size) {
+        // TODO
+        assert(false);
+      } else {
+        // Enough space at front, update watermark
+        target = 0;
+        remote_meta->watermark = remote_meta->write;
+        nvshmem_longlong_atomic_set(&local_meta->watermark, remote_meta->watermark, dst_pe);
+      }
+    } else {
+      // Enough space
+      target = remote_meta->write;
+    }
+  } else {
+    avail = read - remote_meta->write;
+    if (avail < msg_size) {
+      // Not enough space
+      // TODO
+      assert(false);
+    } else {
+      // Enough space
+      target = remote_meta->write;
+    }
+  }
+  assert(target >= 0);
+
+  // Send message
+  MsgQueueShell& msgq_shell = msg_queue_shell[my_pe];
+  nvshmem_char_put((char*)msgq_shell.addr(target), (char*)env, env->size, dst_pe);
+  remote_meta->write = target + msg_size;
+
+  // FIXME: Don't update every time?
+  nvshmem_longlong_atomic_set(&local_meta->write, remote_meta->write, dst_pe);
 
   // Free region in my message pool
   size_t len, off;
@@ -148,7 +204,8 @@ __device__ __forceinline__ ssize_t next_msg(void* addr, bool& begin_term_flag,
   return env->size;
 }
 
-__device__ __forceinline__ void recv_msg(bool& begin_term_flag, bool &do_term_flag) {
+__device__ __forceinline__ void recv_msg(int my_pe, int n_pes, bool& begin_term_flag, bool &do_term_flag) {
+  /*
   size_t len, off;
   if ((len = mpsc_ringbuf_consume(rbuf, &off)) != 0) {
     // Retrieved a contiguous range, there could be multiple messages
@@ -160,6 +217,27 @@ __device__ __forceinline__ void recv_msg(bool& begin_term_flag, bool &do_term_fl
       rem -= ret;
     }
     mpsc_ringbuf_release(rbuf, len);
+  }
+  */
+
+  // Retrieve symmetric addresses for metadata
+  MsgQueueMeta* remote_meta = remote_meta_shell[my_pe].meta;
+  for (int src_pe = 0; src_pe < n_pes; src_pe++) {
+    MsgQueueMeta* local_meta = local_meta_shell[src_pe].meta;
+    offset_t write = nvshmem_longlong_atomic_fetch(&local_meta->write, my_pe);
+    offset_t watermark = nvshmem_longlong_atomic_fetch(&local_meta->watermark, my_pe);
+    if (local_meta->read < write || local_meta->read < watermark) {
+      // There are messages to process
+      MsgQueueShell& msgq_shell = msg_queue_shell[src_pe];
+      ssize_t msg_size = next_msg(msgq_shell.addr(local_meta->read), begin_term_flag, do_term_flag);
+      local_meta->read += msg_size;
+
+      // FIXME: Don't update every time?
+      nvshmem_longlong_atomic_set(&remote_meta->read, local_meta->read, src_pe);
+    }
+    if (local_meta->read == watermark) {
+      local_meta->read = 0;
+    }
   }
 }
 
@@ -175,7 +253,11 @@ __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
     register_chares();
 
     // Initialize message queue
-    mpsc_ringbuf_init(rbuf, rbuf_size);
+    //mpsc_ringbuf_init(rbuf, rbuf_size);
+    for (int i = 0; i < n_pes; i++) {
+      local_meta_shell[i].init();
+      remote_meta_shell[i].init();
+    }
     spsc_ringbuf_init(mbuf, mbuf_size);
 
     nvshmem_barrier_all();
@@ -189,7 +271,7 @@ __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
 
     // Receive messages and terminate
     do {
-      recv_msg(begin_term_flag, do_term_flag);
+      recv_msg(my_pe, n_pes, begin_term_flag, do_term_flag);
     } while (!do_term_flag);
   }
 }

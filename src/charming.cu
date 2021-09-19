@@ -7,13 +7,16 @@
 #include "charming.h"
 #include "message.h"
 #include "scheduler.h"
+#include "msg_queue.h"
 #include "ringbuf.h"
 #include "util.h"
 
 #define CHARE_TYPE_CNT_MAX 1024 // Maximum number of chare types
 
-__device__ mpsc_ringbuf_t* rbuf;
-__device__ size_t rbuf_size;
+__device__ MsgQueueMetaShell* local_meta_shell; // For receives
+__device__ MsgQueueMetaShell* remote_meta_shell; // For sends
+__device__ MsgQueueShell* msg_queue_shell;
+__device__ size_t msg_queue_size;
 __device__ spsc_ringbuf_t* mbuf;
 __device__ size_t mbuf_size;
 
@@ -64,10 +67,28 @@ int main(int argc, char* argv[]) {
   cudaMemcpyAsync(d_argv, h_argv, sizeof(char*) * argc, cudaMemcpyHostToDevice, stream);
 
   // Allocate message queue with NVSHMEM
-  size_t h_rbuf_size = (1 << 28);
-  mpsc_ringbuf_t* h_rbuf = mpsc_ringbuf_malloc(h_rbuf_size);
+  int n_pes = nvshmem_n_pes();
+  size_t h_msg_queue_size = (1 << 28);
+  MsgQueueMetaShell* h_local_meta_shell;
+  MsgQueueMetaShell* h_remote_meta_shell;
+  MsgQueueShell* h_msg_queue_shell;
+  cudaMallocHost(&h_local_meta_shell, sizeof(MsgQueueMetaShell) * n_pes);
+  cudaMallocHost(&h_remote_meta_shell, sizeof(MsgQueueMetaShell) * n_pes);
+  cudaMallocHost(&h_msg_queue_shell, sizeof(MsgQueueShell) * n_pes);
+  for (int i = 0; i < n_pes; i++) {
+    new (&h_local_meta_shell[i]) MsgQueueMetaShell(h_msg_queue_size);
+    new (&h_remote_meta_shell[i]) MsgQueueMetaShell(h_msg_queue_size);
+    new (&h_msg_queue_shell[i]) MsgQueueShell(h_msg_queue_size);
+  }
+  MsgQueueMetaShell* d_local_meta_shell;
+  MsgQueueMetaShell* d_remote_meta_shell;
+  MsgQueueShell* d_msg_queue_shell;
+  cudaMalloc(&d_local_meta_shell, sizeof(MsgQueueMetaShell) * n_pes);
+  cudaMalloc(&d_remote_meta_shell, sizeof(MsgQueueMetaShell) * n_pes);
+  cudaMalloc(&d_msg_queue_shell, sizeof(MsgQueueShell) * n_pes);
   size_t h_mbuf_size = (1 << 28);
   spsc_ringbuf_t* h_mbuf = spsc_ringbuf_malloc(h_mbuf_size);
+  cuda_check_error();
   nvshmem_barrier_all();
 
   // Launch scheduler
@@ -88,10 +109,19 @@ int main(int argc, char* argv[]) {
            (double)prop.clockRate / 1e6);
   }
   //void* scheduler_args[4] = { &rbuf, &rbuf_size, &mbuf, &mbuf_size };
-  cudaMemcpyToSymbolAsync(rbuf, &h_rbuf, sizeof(mpsc_ringbuf_t*), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(rbuf_size, &h_rbuf_size, sizeof(size_t), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyAsync(d_local_meta_shell, h_local_meta_shell,
+      sizeof(MsgQueueMetaShell) * n_pes, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyAsync(d_remote_meta_shell, h_remote_meta_shell,
+      sizeof(MsgQueueMetaShell) * n_pes, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyAsync(d_msg_queue_shell, h_msg_queue_shell,
+      sizeof(MsgQueueShell) * n_pes, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(local_meta_shell, &d_local_meta_shell, sizeof(MsgQueueMetaShell*), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(remote_meta_shell, &d_remote_meta_shell, sizeof(MsgQueueMetaShell*), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(msg_queue_shell, &d_msg_queue_shell, sizeof(MsgQueueShell*), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(msg_queue_size, &h_msg_queue_size, sizeof(size_t), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(mbuf, &h_mbuf, sizeof(spsc_ringbuf_t*), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(mbuf_size, &h_mbuf_size, sizeof(size_t), 0, cudaMemcpyHostToDevice, stream);
+  cuda_check_error();
   /* TODO: This doesn't support CUDA dynamic parallelism, will it be a problem?
   nvshmemx_collective_launch((const void*)scheduler, grid_size, block_size,
       //scheduler_args, 0, stream);
@@ -104,8 +134,15 @@ int main(int argc, char* argv[]) {
   nvshmem_barrier_all();
 
   // Finalize NVSHMEM and MPI
+  for (int i = 0; i < n_pes; i++) {
+    delete &h_local_meta_shell[i];
+    delete &h_remote_meta_shell[i];
+    delete &h_msg_queue_shell[i];
+  }
+  cudaFreeHost(h_local_meta_shell);
+  cudaFreeHost(h_remote_meta_shell);
+  cudaFreeHost(h_msg_queue_shell);
   spsc_ringbuf_free(h_mbuf);
-  mpsc_ringbuf_free(h_rbuf);
   nvshmem_finalize();
   cudaStreamDestroy(stream);
   MPI_Finalize();
