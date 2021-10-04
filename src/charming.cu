@@ -13,8 +13,8 @@
 
 #define CHARE_TYPE_CNT_MAX 1024 // Maximum number of chare types
 
-__device__ MsgQueueMetaShell* local_meta_shell; // For receives
-__device__ MsgQueueMetaShell* remote_meta_shell; // For sends
+__device__ MsgQueueMetaShell* recv_meta_shell; // For receives
+__device__ MsgQueueMetaShell* send_meta_shell; // For sends
 __device__ MsgQueueShell* msg_queue_shell;
 __device__ size_t msg_queue_size;
 __device__ spsc_ringbuf_t* mbuf;
@@ -69,22 +69,22 @@ int main(int argc, char* argv[]) {
   // Allocate message queue with NVSHMEM
   int n_pes = nvshmem_n_pes();
   size_t h_msg_queue_size = (1 << 28);
-  MsgQueueMetaShell* h_local_meta_shell;
-  MsgQueueMetaShell* h_remote_meta_shell;
+  MsgQueueMetaShell* h_recv_meta_shell;
+  MsgQueueMetaShell* h_send_meta_shell;
   MsgQueueShell* h_msg_queue_shell;
-  cudaMallocHost(&h_local_meta_shell, sizeof(MsgQueueMetaShell) * n_pes);
-  cudaMallocHost(&h_remote_meta_shell, sizeof(MsgQueueMetaShell) * n_pes);
+  cudaMallocHost(&h_recv_meta_shell, sizeof(MsgQueueMetaShell) * n_pes);
+  cudaMallocHost(&h_send_meta_shell, sizeof(MsgQueueMetaShell) * n_pes);
   cudaMallocHost(&h_msg_queue_shell, sizeof(MsgQueueShell) * n_pes);
   for (int i = 0; i < n_pes; i++) {
-    new (&h_local_meta_shell[i]) MsgQueueMetaShell(h_msg_queue_size);
-    new (&h_remote_meta_shell[i]) MsgQueueMetaShell(h_msg_queue_size);
+    new (&h_recv_meta_shell[i]) MsgQueueMetaShell(h_msg_queue_size);
+    new (&h_send_meta_shell[i]) MsgQueueMetaShell(h_msg_queue_size);
     new (&h_msg_queue_shell[i]) MsgQueueShell(h_msg_queue_size);
   }
-  MsgQueueMetaShell* d_local_meta_shell;
-  MsgQueueMetaShell* d_remote_meta_shell;
+  MsgQueueMetaShell* d_recv_meta_shell;
+  MsgQueueMetaShell* d_send_meta_shell;
   MsgQueueShell* d_msg_queue_shell;
-  cudaMalloc(&d_local_meta_shell, sizeof(MsgQueueMetaShell) * n_pes);
-  cudaMalloc(&d_remote_meta_shell, sizeof(MsgQueueMetaShell) * n_pes);
+  cudaMalloc(&d_recv_meta_shell, sizeof(MsgQueueMetaShell) * n_pes);
+  cudaMalloc(&d_send_meta_shell, sizeof(MsgQueueMetaShell) * n_pes);
   cudaMalloc(&d_msg_queue_shell, sizeof(MsgQueueShell) * n_pes);
   size_t h_mbuf_size = (1 << 28);
   spsc_ringbuf_t* h_mbuf = spsc_ringbuf_malloc(h_mbuf_size);
@@ -109,14 +109,14 @@ int main(int argc, char* argv[]) {
            (double)prop.clockRate / 1e6);
   }
   //void* scheduler_args[4] = { &rbuf, &rbuf_size, &mbuf, &mbuf_size };
-  cudaMemcpyAsync(d_local_meta_shell, h_local_meta_shell,
+  cudaMemcpyAsync(d_recv_meta_shell, h_recv_meta_shell,
       sizeof(MsgQueueMetaShell) * n_pes, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyAsync(d_remote_meta_shell, h_remote_meta_shell,
+  cudaMemcpyAsync(d_send_meta_shell, h_send_meta_shell,
       sizeof(MsgQueueMetaShell) * n_pes, cudaMemcpyHostToDevice, stream);
   cudaMemcpyAsync(d_msg_queue_shell, h_msg_queue_shell,
       sizeof(MsgQueueShell) * n_pes, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(local_meta_shell, &d_local_meta_shell, sizeof(MsgQueueMetaShell*), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(remote_meta_shell, &d_remote_meta_shell, sizeof(MsgQueueMetaShell*), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(recv_meta_shell, &d_recv_meta_shell, sizeof(MsgQueueMetaShell*), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(send_meta_shell, &d_send_meta_shell, sizeof(MsgQueueMetaShell*), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(msg_queue_shell, &d_msg_queue_shell, sizeof(MsgQueueShell*), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(msg_queue_size, &h_msg_queue_size, sizeof(size_t), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(mbuf, &h_mbuf, sizeof(spsc_ringbuf_t*), 0, cudaMemcpyHostToDevice, stream);
@@ -135,12 +135,12 @@ int main(int argc, char* argv[]) {
 
   // Finalize NVSHMEM and MPI
   for (int i = 0; i < n_pes; i++) {
-    delete &h_local_meta_shell[i];
-    delete &h_remote_meta_shell[i];
+    delete &h_recv_meta_shell[i];
+    delete &h_send_meta_shell[i];
     delete &h_msg_queue_shell[i];
   }
-  cudaFreeHost(h_local_meta_shell);
-  cudaFreeHost(h_remote_meta_shell);
+  cudaFreeHost(h_recv_meta_shell);
+  cudaFreeHost(h_send_meta_shell);
   cudaFreeHost(h_msg_queue_shell);
   spsc_ringbuf_free(h_mbuf);
   nvshmem_finalize();
