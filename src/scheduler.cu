@@ -117,9 +117,8 @@ __device__ void charm::send_msg(envelope* env, size_t msg_size, int dst_pe) {
   send_meta->write += msg_size;
 
   // FIXME: Don't update receiver's write offset every time?
-  nvshmem_quiet();
+  nvshmem_fence();
   nvshmem_longlong_atomic_set(&recv_meta->write, send_meta->write, dst_pe);
-  nvshmem_quiet();
 
   // Free region in my message pool
   size_t len, off;
