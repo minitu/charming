@@ -12,6 +12,7 @@ struct Comm : charm::chare {
   size_t max_size;
   size_t cur_size;
   int n_iters;
+  int warmup;
   int iter;
   char* data;
 
