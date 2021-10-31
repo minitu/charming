@@ -84,6 +84,6 @@ __device__ void charm::main(int argc, char** argv, size_t* argvs) {
   Comm comm;
   comm_proxy->create(comm, 2);
   constexpr int n_params = 3;
-  size_t params[n_params] = { min_size, max_size, n_iters };
+  size_t params[n_params] = { min_size, max_size, static_cast<size_t>(n_iters) };
   comm_proxy->invoke_all(0, params, sizeof(size_t) * n_params);
 }
