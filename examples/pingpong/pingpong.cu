@@ -44,14 +44,17 @@ __device__ void Comm::send() {
     if (iter == warmup) {
       start_tp = cuda::std::chrono::system_clock::now();
     }
+#if DEBUG
     printf("Index %d iter %d sending size %lu\n", index, iter, cur_size);
+#endif
     comm_proxy->invoke(peer, 2, data, cur_size);
   } else {
     // End iteration
+#if DEBUG
     printf("Index %d iter %d sending size %lu\n", index, iter, cur_size);
+#endif
     comm_proxy->invoke(peer, 2, data, cur_size);
-    iter++;
-    if (iter == n_iters + warmup) {
+    if (++iter == n_iters + warmup) {
       cur_size *= 2;
       iter = 0;
     }
@@ -60,9 +63,10 @@ __device__ void Comm::send() {
 
 __device__ void Comm::recv(void* arg) {
   if (index == 0) {
+#if DEBUG
     printf("Index %d iter %d received size %lu\n", index, iter, cur_size);
-    iter++;
-    if (iter == n_iters + warmup) {
+#endif
+    if (++iter == n_iters + warmup) {
       end_tp = cuda::std::chrono::system_clock::now();
       cuda::std::chrono::duration<double> diff = end_tp - start_tp;
       printf("Size %llu took %.3lf us\n", cur_size, (diff.count() / 2 / n_iters) * 1000000);
@@ -74,7 +78,9 @@ __device__ void Comm::recv(void* arg) {
       }
     }
   } else {
+#if DEBUG
     printf("Index %d iter %d received size %lu\n", index, iter, cur_size);
+#endif
   }
   send();
 }

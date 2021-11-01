@@ -276,7 +276,7 @@ __device__ __forceinline__ void recv_msg(int my_pe, int n_pes, bool& begin_term_
     MsgQueueMeta* recv_meta = recv_meta_shell[src_pe].meta;
     offset_t write = nvshmem_longlong_atomic_fetch(&recv_meta->write, my_pe);
 #if DEBUG
-    printf("PE %d checking mss queue from PE %d, read %lld, write %lld\n", my_pe, src_pe, recv_meta->read, write);
+    printf("PE %d checking msg queue from PE %d, read %lld, write %lld\n", my_pe, src_pe, recv_meta->read, write);
 #endif
     if (recv_meta->read < write) {
       // There are messages to process
@@ -319,5 +319,9 @@ __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
     do {
       recv_msg(my_pe, n_pes, begin_term_flag, do_term_flag);
     } while (!do_term_flag);
+
+#if DEBUG
+    printf("PE %d terminating...\n", my_pe);
+#endif
   }
 }

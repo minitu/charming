@@ -135,9 +135,10 @@ int main(int argc, char* argv[]) {
 
   // Finalize NVSHMEM and MPI
   for (int i = 0; i < n_pes; i++) {
-    delete &h_recv_meta_shell[i];
-    delete &h_send_meta_shell[i];
-    delete &h_msg_queue_shell[i];
+    // Explicitly call destructors since these were placement new'ed
+    h_recv_meta_shell[i].MsgQueueMetaShell::~MsgQueueMetaShell();
+    h_send_meta_shell[i].MsgQueueMetaShell::~MsgQueueMetaShell();
+    h_msg_queue_shell[i].MsgQueueShell::~MsgQueueShell();
   }
   cudaFreeHost(h_recv_meta_shell);
   cudaFreeHost(h_send_meta_shell);
