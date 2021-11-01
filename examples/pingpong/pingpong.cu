@@ -60,8 +60,8 @@ __device__ void Comm::send() {
 
 __device__ void Comm::recv(void* arg) {
   if (index == 0) {
-    iter++;
     printf("Index %d iter %d received size %lu\n", index, iter, cur_size);
+    iter++;
     if (iter == n_iters + warmup) {
       end_tp = cuda::std::chrono::system_clock::now();
       cuda::std::chrono::duration<double> diff = end_tp - start_tp;
