@@ -4,33 +4,29 @@
 #include <mpi.h>
 #include <nvshmem.h>
 #include <nvshmemx.h>
+
 #include "charming.h"
 #include "message.h"
 #include "scheduler.h"
-#include "msg_queue.h"
 #include "ringbuf.h"
 #include "util.h"
 
 #define CHARE_TYPE_CNT_MAX 1024 // Maximum number of chare types
 
-__device__ MsgQueueMetaShell* recv_meta_shell; // For receives
-__device__ MsgQueueMetaShell* send_meta_shell; // For sends
-__device__ MsgQueueShell* msg_queue_shell;
-__device__ size_t msg_queue_size;
+using namespace charm;
+
 __device__ spsc_ringbuf_t* mbuf;
 __device__ size_t mbuf_size;
-
-using namespace charm;
 
 __device__ chare_proxy_base* chare_proxies[CHARE_TYPE_CNT_MAX];
 __device__ int chare_proxy_cnt;
 
 int main(int argc, char* argv[]) {
-  int rank;
-  cudaStream_t stream;
-
   // Initialize MPI
   MPI_Init(&argc, &argv);
+  int world_size;
+  int rank;
+  MPI_Comm_size(MPI_COMM_WORLD, &world_size);
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
   // Initialize NVSHMEM
@@ -38,10 +34,22 @@ int main(int argc, char* argv[]) {
   MPI_Comm comm = MPI_COMM_WORLD;
   attr.mpi_comm = &comm;
   nvshmemx_init_attr(NVSHMEMX_INIT_WITH_MPI_COMM, &attr);
+  int n_pes = nvshmem_n_pes();
 
   // Initialize CUDA
+  // FIXME: Always mapped to first device
+  int n_devices = 0;
+  cudaGetDeviceCount(&n_devices);
+  if (n_devices <= 0) {
+    if (rank == 0) {
+      printf("ERROR: Need at least 1 GPU but detected %d GPUs\n", n_devices);
+    }
+    return -1;
+  }
   cudaSetDevice(0);
+  cudaStream_t stream;
   cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+  cuda_check_error();
 
   // Transfer command line arguments to GPU
   size_t h_argvs[argc];
@@ -65,87 +73,56 @@ int main(int argc, char* argv[]) {
   char** d_argv;
   cudaMalloc(&d_argv, sizeof(char*) * argc);
   cudaMemcpyAsync(d_argv, h_argv, sizeof(char*) * argc, cudaMemcpyHostToDevice, stream);
+  cuda_check_error();
 
-  // Allocate message queue with NVSHMEM
-  int n_pes = nvshmem_n_pes();
-  size_t h_msg_queue_size = (1 << 28);
-  MsgQueueMetaShell* h_recv_meta_shell;
-  MsgQueueMetaShell* h_send_meta_shell;
-  MsgQueueShell* h_msg_queue_shell;
-  cudaMallocHost(&h_recv_meta_shell, sizeof(MsgQueueMetaShell) * n_pes);
-  cudaMallocHost(&h_send_meta_shell, sizeof(MsgQueueMetaShell) * n_pes);
-  cudaMallocHost(&h_msg_queue_shell, sizeof(MsgQueueShell) * n_pes);
-  for (int i = 0; i < n_pes; i++) {
-    new (&h_recv_meta_shell[i]) MsgQueueMetaShell(h_msg_queue_size);
-    new (&h_send_meta_shell[i]) MsgQueueMetaShell(h_msg_queue_size);
-    new (&h_msg_queue_shell[i]) MsgQueueShell(h_msg_queue_size);
-  }
-  MsgQueueMetaShell* d_recv_meta_shell;
-  MsgQueueMetaShell* d_send_meta_shell;
-  MsgQueueShell* d_msg_queue_shell;
-  cudaMalloc(&d_recv_meta_shell, sizeof(MsgQueueMetaShell) * n_pes);
-  cudaMalloc(&d_send_meta_shell, sizeof(MsgQueueMetaShell) * n_pes);
-  cudaMalloc(&d_msg_queue_shell, sizeof(MsgQueueShell) * n_pes);
-  size_t h_mbuf_size = (1 << 28);
+  // Allocate message buffer using NVSHMEM, whose size will be
+  // half of available GPU memory
+  cudaDeviceProp prop;
+  cudaGetDeviceProperties(&prop, 0);
+  size_t h_mbuf_size = prop.totalGlobalMem / 2;
   spsc_ringbuf_t* h_mbuf = spsc_ringbuf_malloc(h_mbuf_size);
   cuda_check_error();
+
+  // Synchronize all NVSHMEM PEs
   nvshmem_barrier_all();
 
-  // Launch scheduler
-  int grid_size = 1;
-  int block_size = 1;
-  //cudaDeviceSetLimit(cudaLimitStackSize, 16384);
+  // Change device limits
   size_t stack_size, heap_size;
-  size_t new_heap_size = 8589934592; // Set heap max to 8GB
+  size_t new_heap_size = 8589934592; // Set max heap size to 8GB
+  //cudaDeviceSetLimit(cudaLimitStackSize, 16384);
   cudaDeviceGetLimit(&stack_size, cudaLimitStackSize);
   cudaDeviceSetLimit(cudaLimitMallocHeapSize, new_heap_size);
   cudaDeviceGetLimit(&heap_size, cudaLimitMallocHeapSize);
-  cudaDeviceProp prop;
-  cudaGetDeviceProperties(&prop, 0);
-  if (!rank) {
-    printf("CHARMING\nGrid size: %d\nBlock size: %d\nStack size: %llu\n"
-           "Heap size: %llu\nClock rate: %.2lf GHz\n",
+
+  // Print configuration and launch scheduler
+  int grid_size = prop.multiProcessorCount;
+  int block_size = prop.maxThreadsPerBlock;
+  if (rank == 0) {
+    printf("CHARMING\nGrid size: %d\nBlock size: %d\nStack size: %llu B\n"
+           "Heap size: %llu B\nClock rate: %.2lf GHz\n",
            grid_size, block_size, stack_size, heap_size,
            (double)prop.clockRate / 1e6);
   }
-  //void* scheduler_args[4] = { &rbuf, &rbuf_size, &mbuf, &mbuf_size };
-  cudaMemcpyAsync(d_recv_meta_shell, h_recv_meta_shell,
-      sizeof(MsgQueueMetaShell) * n_pes, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyAsync(d_send_meta_shell, h_send_meta_shell,
-      sizeof(MsgQueueMetaShell) * n_pes, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyAsync(d_msg_queue_shell, h_msg_queue_shell,
-      sizeof(MsgQueueShell) * n_pes, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(recv_meta_shell, &d_recv_meta_shell, sizeof(MsgQueueMetaShell*), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(send_meta_shell, &d_send_meta_shell, sizeof(MsgQueueMetaShell*), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(msg_queue_shell, &d_msg_queue_shell, sizeof(MsgQueueShell*), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(msg_queue_size, &h_msg_queue_size, sizeof(size_t), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(mbuf, &h_mbuf, sizeof(spsc_ringbuf_t*), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(mbuf_size, &h_mbuf_size, sizeof(size_t), 0, cudaMemcpyHostToDevice, stream);
   cuda_check_error();
-  /* TODO: This doesn't support CUDA dynamic parallelism, will it be a problem?
+  /* This doesn't support CUDA dynamic parallelism, will it be a problem?
+  void* scheduler_args[4] = { &rbuf, &rbuf_size, &mbuf, &mbuf_size };
   nvshmemx_collective_launch((const void*)scheduler, grid_size, block_size,
       //scheduler_args, 0, stream);
       nullptr, 0, stream);
-      */
+  */
   scheduler<<<grid_size, block_size, 0, stream>>>(argc, d_argv, d_argvs);
-  cuda_check_error();
   cudaStreamSynchronize(stream);
+  cuda_check_error();
+
   //nvshmemx_barrier_all_on_stream(stream); // Hangs
   nvshmem_barrier_all();
 
-  // Finalize NVSHMEM and MPI
-  for (int i = 0; i < n_pes; i++) {
-    // Explicitly call destructors since these were placement new'ed
-    h_recv_meta_shell[i].MsgQueueMetaShell::~MsgQueueMetaShell();
-    h_send_meta_shell[i].MsgQueueMetaShell::~MsgQueueMetaShell();
-    h_msg_queue_shell[i].MsgQueueShell::~MsgQueueShell();
-  }
-  cudaFreeHost(h_recv_meta_shell);
-  cudaFreeHost(h_send_meta_shell);
-  cudaFreeHost(h_msg_queue_shell);
+  // Cleanup
   spsc_ringbuf_free(h_mbuf);
-  nvshmem_finalize();
   cudaStreamDestroy(stream);
+  nvshmem_finalize();
   MPI_Finalize();
 
   return 0;

@@ -1,26 +1,18 @@
-#include "scheduler.h"
+//#include "scheduler.h"
 #include "charming.h"
 #include "chare.h"
-#include "msg_queue.h"
 #include "ringbuf.h"
 #include "util.h"
 
-/*
-extern __device__ mpsc_ringbuf_t* rbuf;
-extern __device__ size_t rbuf_size;
-*/
-extern __device__ MsgQueueMetaShell* recv_meta_shell;
-extern __device__ MsgQueueMetaShell* send_meta_shell;
-extern __device__ MsgQueueShell* msg_queue_shell;
-extern __device__ size_t msg_queue_size;
+using namespace charm;
+
 extern __device__ spsc_ringbuf_t* mbuf;
 extern __device__ size_t mbuf_size;
-
-using namespace charm;
 
 extern __device__ chare_proxy_base* chare_proxies[];
 
 __device__ envelope* charm::create_envelope(msgtype type, size_t msg_size) {
+  /*
   // Secure region in my message pool
   ringbuf_off_t mret = spsc_ringbuf_acquire(mbuf, msg_size);
   assert(mret != -1 && mret < mbuf_size);
@@ -29,80 +21,13 @@ __device__ envelope* charm::create_envelope(msgtype type, size_t msg_size) {
   envelope* env = new (mbuf->addr(mret)) envelope(type, msg_size, nvshmem_my_pe());
 
   return env;
+  */
 }
 
 __device__ void charm::send_msg(envelope* env, size_t msg_size, int dst_pe) {
+  /*
   int my_pe = nvshmem_my_pe();
   spsc_ringbuf_produce(mbuf);
-
-  /*
-  // Secure region in destination PE's message queue
-  ringbuf_off_t rret;
-  while ((rret = mpsc_ringbuf_acquire(rbuf, msg_size, dst_pe)) == -1) {}
-  assert(rret < rbuf_size);
-
-  // Send message
-  nvshmem_char_put((char*)rbuf->addr(rret), (char*)env, env->size, dst_pe);
-  nvshmem_quiet();
-  mpsc_ringbuf_produce(rbuf, dst_pe);
-  */
-
-  /*
-  // Retrieve symmetric addresses for metadata
-  MsgQueueMeta* send_meta = send_meta_shell[dst_pe].meta;
-  MsgQueueMeta* recv_meta = recv_meta_shell[my_pe].meta;
-
-  // Determine offset in destination PE's msg queue
-  offset_t avail;
-  offset_t target = -1;
-  offset_t read = nvshmem_longlong_atomic_fetch(&send_meta->read, my_pe);
-  if (send_meta->write >= read) {
-    // Write is ahead of read
-    avail = send_meta->watermark - send_meta->write;
-    if (avail < msg_size) {
-      // Not enough space, check front
-      avail = read - 4; // Write should never catch up to read
-      if (avail < msg_size) {
-        // TODO
-        assert(false);
-      } else {
-        // Enough space at front, update watermark
-        target = 0;
-        send_meta->watermark = send_meta->write;
-        nvshmem_longlong_atomic_set(&recv_meta->watermark, send_meta->watermark, dst_pe);
-      }
-    } else {
-      // Restore watermark
-      if (send_meta->watermark < msg_queue_size) {
-        send_meta->watermark = msg_queue_size;
-        nvshmem_longlong_atomic_set(&recv_meta->watermark, send_meta->watermark, dst_pe);
-      }
-
-      // Enough space
-      target = send_meta->write;
-    }
-  } else {
-    // Read is ahead of write
-    avail = read - send_meta->write - 4; // Write should never catch up to read
-    if (avail < msg_size) {
-      // Not enough space
-      // TODO
-      assert(false);
-    } else {
-      // Enough space
-      target = send_meta->write;
-    }
-  }
-  assert(target >= 0);
-
-  // Send message
-  MsgQueueShell& msgq_shell = msg_queue_shell[my_pe];
-  nvshmem_char_put((char*)msgq_shell.addr(target), (char*)env, env->size, dst_pe);
-  send_meta->write = target + msg_size;
-
-  // FIXME: Don't update every time?
-  nvshmem_longlong_atomic_set(&recv_meta->write, send_meta->write, dst_pe);
-  */
 
   // TODO: Don't assume no wrap-around, use watermark
   // Retrieve symmetric addresses for metadata
@@ -124,17 +49,21 @@ __device__ void charm::send_msg(envelope* env, size_t msg_size, int dst_pe) {
   size_t len, off;
   len = spsc_ringbuf_consume(mbuf, &off);
   spsc_ringbuf_release(mbuf, len);
+  */
 }
 
 __device__ void charm::send_dummy_msg(int dst_pe) {
+  /*
   size_t msg_size = envelope::alloc_size(0);
   envelope* env = create_envelope(msgtype::dummy, msg_size);
 
   send_msg(env, msg_size, dst_pe);
+  */
 }
 
 __device__ void charm::send_reg_msg(int chare_id, int chare_idx, int ep_id,
                                     void* buf, size_t payload_size, int dst_pe) {
+  /*
   size_t msg_size = envelope::alloc_size(sizeof(regular_msg) + payload_size);
   envelope* env = create_envelope(msgtype::regular, msg_size);
 
@@ -146,24 +75,30 @@ __device__ void charm::send_reg_msg(int chare_id, int chare_idx, int ep_id,
   }
 
   send_msg(env, msg_size, dst_pe);
+  */
 }
 
 __device__ void charm::send_begin_term_msg(int dst_pe) {
+  /*
   size_t msg_size = envelope::alloc_size(0);
   envelope* env = create_envelope(msgtype::begin_terminate, msg_size);
 
   send_msg(env, msg_size, dst_pe);
+  */
 }
 
 __device__ void charm::send_do_term_msg(int dst_pe) {
+  /*
   size_t msg_size = envelope::alloc_size(0);
   envelope* env = create_envelope(msgtype::do_terminate, msg_size);
 
   send_msg(env, msg_size, dst_pe);
+  */
 }
 
 __device__ __forceinline__ ssize_t next_msg(void* addr, bool& begin_term_flag,
                                             bool& do_term_flag) {
+  /*
   static int dummy_cnt = 0;
   static clock_value_t start;
   static clock_value_t end;
@@ -229,47 +164,11 @@ __device__ __forceinline__ ssize_t next_msg(void* addr, bool& begin_term_flag,
   }
 
   return env->size;
+  */
 }
 
 __device__ __forceinline__ void recv_msg(int my_pe, int n_pes, bool& begin_term_flag, bool &do_term_flag) {
   /*
-  size_t len, off;
-  if ((len = mpsc_ringbuf_consume(rbuf, &off)) != 0) {
-    // Retrieved a contiguous range, there could be multiple messages
-    size_t rem = len;
-    ssize_t ret;
-    while (rem) {
-      ret = next_msg(rbuf->addr(off), begin_term_flag, do_term_flag);
-      off += ret;
-      rem -= ret;
-    }
-    mpsc_ringbuf_release(rbuf, len);
-  }
-  */
-
-  /*
-  // Retrieve symmetric addresses for metadata
-  MsgQueueMeta* send_meta = send_meta_shell[my_pe].meta;
-  for (int src_pe = 0; src_pe < n_pes; src_pe++) {
-    MsgQueueMeta* recv_meta = recv_meta_shell[src_pe].meta;
-    offset_t write = nvshmem_longlong_atomic_fetch(&recv_meta->write, my_pe);
-    offset_t watermark = nvshmem_longlong_atomic_fetch(&recv_meta->watermark, my_pe);
-    printf("My PE %d, src PE %d, read %lld, write %lld, watermark %lld\n", my_pe, src_pe, recv_meta->read, write, watermark);
-    if (recv_meta->read < write || (recv_meta->read > write && recv_meta->read < watermark)) {
-      // There are messages to process
-      MsgQueueShell& msgq_shell = msg_queue_shell[src_pe];
-      ssize_t msg_size = next_msg(msgq_shell.addr(recv_meta->read), begin_term_flag, do_term_flag);
-      recv_meta->read += msg_size;
-
-      // FIXME: Don't update every time?
-      nvshmem_longlong_atomic_set(&send_meta->read, recv_meta->read, src_pe);
-    }
-    if (recv_meta->read == watermark) {
-      recv_meta->read = 0;
-    }
-  }
-  */
-
   // Retrieve symmetric addresses for metadata
   MsgQueueMeta* send_meta = send_meta_shell[my_pe].meta;
   for (int src_pe = 0; src_pe < n_pes; src_pe++) {
@@ -285,9 +184,11 @@ __device__ __forceinline__ void recv_msg(int my_pe, int n_pes, bool& begin_term_
       recv_meta->read += msg_size;
     }
   }
+  */
 }
 
 __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
+  /*
   if (!blockIdx.x && !threadIdx.x) {
     bool begin_term_flag = false;
     bool do_term_flag = false;
@@ -324,4 +225,5 @@ __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
     printf("PE %d terminating...\n", my_pe);
 #endif
   }
+  */
 }
