@@ -11,12 +11,22 @@
 #include "ringbuf.h"
 #include "util.h"
 
-#define CHARE_TYPE_CNT_MAX 1024 // Maximum number of chare types
+// Maximum number of chare types
+#define CHARE_TYPE_CNT_MAX 1024
+// Maximum number of messages that are allowed to be in flight per pair of PEs
+#define MSG_IN_FLIGHT_MAX 128
 
 using namespace charm;
 
+__constant__ int c_my_pe;
+__constant__ int c_n_pes;
+
 __device__ spsc_ringbuf_t* mbuf;
 __device__ size_t mbuf_size;
+__device__ uint64_t* signal_arr;
+__device__ uint64_t* addr_arr;
+__device__ uint64_t* size_arr;
+__device__ size_t arr_size;
 
 __device__ chare_proxy_base* chare_proxies[CHARE_TYPE_CNT_MAX];
 __device__ int chare_proxy_cnt;
@@ -34,7 +44,8 @@ int main(int argc, char* argv[]) {
   MPI_Comm comm = MPI_COMM_WORLD;
   attr.mpi_comm = &comm;
   nvshmemx_init_attr(NVSHMEMX_INIT_WITH_MPI_COMM, &attr);
-  int n_pes = nvshmem_n_pes();
+  int h_my_pe = nvshmem_my_pe();
+  int h_n_pes = nvshmem_n_pes();
 
   // Initialize CUDA
   // FIXME: Always mapped to first device
@@ -75,12 +86,17 @@ int main(int argc, char* argv[]) {
   cudaMemcpyAsync(d_argv, h_argv, sizeof(char*) * argc, cudaMemcpyHostToDevice, stream);
   cuda_check_error();
 
-  // Allocate message buffer using NVSHMEM, whose size will be
-  // half of available GPU memory
+  // Allocate message buffer and other data structures using NVSHMEM
   cudaDeviceProp prop;
   cudaGetDeviceProperties(&prop, 0);
-  size_t h_mbuf_size = prop.totalGlobalMem / 2;
+  //size_t h_mbuf_size = prop.totalGlobalMem / 2;
+  size_t h_mbuf_size = 1073741824;
   spsc_ringbuf_t* h_mbuf = spsc_ringbuf_malloc(h_mbuf_size);
+  size_t h_arr_size = MSG_IN_FLIGHT_MAX * h_n_pes * sizeof(uint64_t);
+  uint64_t* h_signal_arr = (uint64_t*)nvshmem_malloc(h_arr_size);
+  uint64_t* h_addr_arr = (uint64_t*)nvshmem_malloc(h_arr_size);
+  uint64_t* h_size_arr = (uint64_t*)nvshmem_malloc(h_arr_size);
+  assert(h_signal_arr && h_addr_arr && h_size_arr);
   cuda_check_error();
 
   // Synchronize all NVSHMEM PEs
@@ -95,16 +111,27 @@ int main(int argc, char* argv[]) {
   cudaDeviceGetLimit(&heap_size, cudaLimitMallocHeapSize);
 
   // Print configuration and launch scheduler
+  /*
   int grid_size = prop.multiProcessorCount;
   int block_size = prop.maxThreadsPerBlock;
+  */
+  int grid_size = 1;
+  int block_size = 1;
   if (rank == 0) {
     printf("CHARMING\nGrid size: %d\nBlock size: %d\nStack size: %llu B\n"
            "Heap size: %llu B\nClock rate: %.2lf GHz\n",
            grid_size, block_size, stack_size, heap_size,
            (double)prop.clockRate / 1e6);
   }
+  cudaMemcpyToSymbolAsync(c_my_pe, &h_my_pe, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(c_n_pes, &h_n_pes, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(mbuf, &h_mbuf, sizeof(spsc_ringbuf_t*), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(mbuf_size, &h_mbuf_size, sizeof(size_t), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(signal_arr, &h_signal_arr, sizeof(uint64_t*), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(addr_arr, &h_addr_arr, sizeof(uint64_t*), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(size_arr, &h_size_arr, sizeof(uint64_t*), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(arr_size, &h_arr_size, sizeof(size_t), 0, cudaMemcpyHostToDevice, stream);
+
   cuda_check_error();
   /* This doesn't support CUDA dynamic parallelism, will it be a problem?
   void* scheduler_args[4] = { &rbuf, &rbuf_size, &mbuf, &mbuf_size };
@@ -120,6 +147,9 @@ int main(int argc, char* argv[]) {
   nvshmem_barrier_all();
 
   // Cleanup
+  nvshmem_free(h_signal_arr);
+  nvshmem_free(h_addr_arr);
+  nvshmem_free(h_size_arr);
   spsc_ringbuf_free(h_mbuf);
   cudaStreamDestroy(stream);
   nvshmem_finalize();
@@ -133,12 +163,12 @@ __device__ void charm::end() {
   send_begin_term_msg(0);
 }
 
-__device__ int charm::n_pes() {
-  return nvshmem_n_pes();
+__device__ __forceinline__ int charm::n_pes() {
+  return c_n_pes;
 }
 
-__device__ int charm::my_pe() {
-  return nvshmem_my_pe();
+__device__ __forceinline__ int charm::my_pe() {
+  return c_my_pe;
 }
 
 __device__ int charm::device_atoi(const char* str, int strlen) {

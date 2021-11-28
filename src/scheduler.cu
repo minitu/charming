@@ -6,13 +6,19 @@
 
 using namespace charm;
 
+extern __constant__ int c_my_pe;
+extern __constant__ int c_n_pes;
+
 extern __device__ spsc_ringbuf_t* mbuf;
 extern __device__ size_t mbuf_size;
+extern __device__ uint64_t* signal_arr;
+extern __device__ uint64_t* addr_arr;
+extern __device__ uint64_t* size_arr;
+extern __device__ size_t arr_size;
 
 extern __device__ chare_proxy_base* chare_proxies[];
 
 __device__ envelope* charm::create_envelope(msgtype type, size_t msg_size) {
-  /*
   // Secure region in my message pool
   ringbuf_off_t mret = spsc_ringbuf_acquire(mbuf, msg_size);
   assert(mret != -1 && mret < mbuf_size);
@@ -21,7 +27,6 @@ __device__ envelope* charm::create_envelope(msgtype type, size_t msg_size) {
   envelope* env = new (mbuf->addr(mret)) envelope(type, msg_size, nvshmem_my_pe());
 
   return env;
-  */
 }
 
 __device__ void charm::send_msg(envelope* env, size_t msg_size, int dst_pe) {
@@ -188,23 +193,18 @@ __device__ __forceinline__ void recv_msg(int my_pe, int n_pes, bool& begin_term_
 }
 
 __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
-  /*
   if (!blockIdx.x && !threadIdx.x) {
     bool begin_term_flag = false;
     bool do_term_flag = false;
-    int my_pe = nvshmem_my_pe();
-    int n_pes = nvshmem_n_pes();
+
+    printf("PE: %d, N_PES: %d\n", c_my_pe, c_n_pes);
+    /*
 
     // Register user chares and entry methods on all PEs
     chare_proxy_cnt = 0;
     register_chares();
 
     // Initialize message queue
-    //mpsc_ringbuf_init(rbuf, rbuf_size);
-    for (int i = 0; i < n_pes; i++) {
-      recv_meta_shell[i].init();
-      send_meta_shell[i].init();
-    }
     spsc_ringbuf_init(mbuf, mbuf_size);
 
     nvshmem_barrier_all();
@@ -224,6 +224,6 @@ __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
 #if DEBUG
     printf("PE %d terminating...\n", my_pe);
 #endif
+*/
   }
-  */
 }
