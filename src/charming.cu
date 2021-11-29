@@ -13,8 +13,6 @@
 
 // Maximum number of chare types
 #define CHARE_TYPE_CNT_MAX 1024
-// Maximum number of messages that are allowed to be in flight per pair of PEs
-#define MSG_IN_FLIGHT_MAX 128
 
 using namespace charm;
 
@@ -23,7 +21,7 @@ __constant__ int c_n_pes;
 
 __device__ spsc_ringbuf_t* mbuf;
 __device__ size_t mbuf_size;
-__device__ uint64_t* signal_arr;
+__device__ uint64_t* used_arr;
 __device__ uint64_t* addr_arr;
 __device__ uint64_t* size_arr;
 __device__ size_t arr_size;
@@ -86,17 +84,17 @@ int main(int argc, char* argv[]) {
   cudaMemcpyAsync(d_argv, h_argv, sizeof(char*) * argc, cudaMemcpyHostToDevice, stream);
   cuda_check_error();
 
-  // Allocate message buffer and other data structures using NVSHMEM
+  // Allocate message buffer and signal arrays using NVSHMEM
   cudaDeviceProp prop;
   cudaGetDeviceProperties(&prop, 0);
   //size_t h_mbuf_size = prop.totalGlobalMem / 2;
   size_t h_mbuf_size = 1073741824;
   spsc_ringbuf_t* h_mbuf = spsc_ringbuf_malloc(h_mbuf_size);
   size_t h_arr_size = MSG_IN_FLIGHT_MAX * h_n_pes * sizeof(uint64_t);
-  uint64_t* h_signal_arr = (uint64_t*)nvshmem_malloc(h_arr_size);
+  uint64_t* h_used_arr = (uint64_t*)nvshmem_malloc(h_arr_size);
   uint64_t* h_addr_arr = (uint64_t*)nvshmem_malloc(h_arr_size);
   uint64_t* h_size_arr = (uint64_t*)nvshmem_malloc(h_arr_size);
-  assert(h_signal_arr && h_addr_arr && h_size_arr);
+  assert(h_used_arr && h_addr_arr && h_size_arr);
   cuda_check_error();
 
   // Synchronize all NVSHMEM PEs
@@ -104,10 +102,10 @@ int main(int argc, char* argv[]) {
 
   // Change device limits
   size_t stack_size, heap_size;
-  size_t new_heap_size = 8589934592; // Set max heap size to 8GB
+  //size_t new_heap_size = 8589934592; // Set max heap size to 8GB
   //cudaDeviceSetLimit(cudaLimitStackSize, 16384);
   cudaDeviceGetLimit(&stack_size, cudaLimitStackSize);
-  cudaDeviceSetLimit(cudaLimitMallocHeapSize, new_heap_size);
+  //cudaDeviceSetLimit(cudaLimitMallocHeapSize, new_heap_size);
   cudaDeviceGetLimit(&heap_size, cudaLimitMallocHeapSize);
 
   // Print configuration and launch scheduler
@@ -127,7 +125,7 @@ int main(int argc, char* argv[]) {
   cudaMemcpyToSymbolAsync(c_n_pes, &h_n_pes, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(mbuf, &h_mbuf, sizeof(spsc_ringbuf_t*), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(mbuf_size, &h_mbuf_size, sizeof(size_t), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(signal_arr, &h_signal_arr, sizeof(uint64_t*), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(used_arr, &h_used_arr, sizeof(uint64_t*), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(addr_arr, &h_addr_arr, sizeof(uint64_t*), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(size_arr, &h_size_arr, sizeof(uint64_t*), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(arr_size, &h_arr_size, sizeof(size_t), 0, cudaMemcpyHostToDevice, stream);
@@ -147,7 +145,7 @@ int main(int argc, char* argv[]) {
   nvshmem_barrier_all();
 
   // Cleanup
-  nvshmem_free(h_signal_arr);
+  nvshmem_free(h_used_arr);
   nvshmem_free(h_addr_arr);
   nvshmem_free(h_size_arr);
   spsc_ringbuf_free(h_mbuf);
@@ -163,11 +161,11 @@ __device__ void charm::end() {
   send_begin_term_msg(0);
 }
 
-__device__ __forceinline__ int charm::n_pes() {
+__device__ int charm::n_pes() {
   return c_n_pes;
 }
 
-__device__ __forceinline__ int charm::my_pe() {
+__device__ int charm::my_pe() {
   return c_my_pe;
 }
 
