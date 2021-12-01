@@ -17,9 +17,16 @@ extern __device__ size_t mbuf_size;
 extern __device__ uint64_t* used_arr;
 extern __device__ uint64_t* addr_arr;
 extern __device__ uint64_t* size_arr;
+extern __device__ size_t* indices_arr;
 extern __device__ size_t arr_size;
 
 extern __device__ chare_proxy_base* chare_proxies[];
+
+enum {
+  SIGNAL_FREE = 0,
+  SIGNAL_USED = 1,
+  SIGNAL_CLUP = 2
+};
 
 __device__ envelope* charm::create_envelope(msgtype type, size_t msg_size) {
   // Reserve space for this message in message buffer
@@ -34,17 +41,17 @@ __device__ void charm::send_msg(envelope* env, size_t msg_size, int dst_pe) {
   // Message is ready to be sent
   spsc_ringbuf_produce(mbuf);
 
-  // Obtain a message index for the target PE and set it to 1
+  // Obtain a message index for the target PE and set the corresponding used signal
   size_t offset = MSG_IN_FLIGHT_MAX * dst_pe;
   uint64_t* my_used_arr = used_arr + offset;
   size_t msg_idx = nvshmem_uint64_wait_until_any(my_used_arr, MSG_IN_FLIGHT_MAX,
-      nullptr, NVSHMEM_CMP_EQ, 0);
-  assert(msg_idx != SIZE_MAX);
-  nvshmemx_signal_op(my_used_arr + msg_idx, 1, NVSHMEM_SIGNAL_SET, c_my_pe);
+      nullptr, NVSHMEM_CMP_EQ, SIGNAL_FREE);
 #ifdef DEBUG
+  assert(msg_idx != SIZE_MAX);
   printf("PE %d sending message request to PE %d, message index %llu, addr %p, size %llu\n",
       c_my_pe, dst_pe, msg_idx, env, msg_size);
 #endif
+  nvshmemx_signal_op(my_used_arr + msg_idx, SIGNAL_USED, NVSHMEM_SIGNAL_SET, c_my_pe);
 
   // Send address of source buffer and message size
   // TODO: Send as one 128-bit buffer?
@@ -55,12 +62,6 @@ __device__ void charm::send_msg(envelope* env, size_t msg_size, int dst_pe) {
   nvshmemx_signal_op(my_size_arr + msg_idx, (uint64_t)msg_size, NVSHMEM_SIGNAL_SET, dst_pe);
 
   // TODO: Needs to be done in comm TB loop
-  /*
-  // Free region in my message pool
-  size_t len, off;
-  len = spsc_ringbuf_consume(mbuf, &off);
-  spsc_ringbuf_release(mbuf, len);
-  */
 }
 
 __device__ void charm::send_dummy_msg(int dst_pe) {
@@ -170,6 +171,7 @@ __device__ __forceinline__ ssize_t next_msg(void* addr, bool& begin_term_flag,
 
 __device__ __forceinline__ void recv_msg(bool& begin_term_flag, bool &do_term_flag) {
   // Check if there are any message requests
+  // TODO: Change to use test_some
   size_t msg_idx = nvshmem_uint64_test_any(addr_arr, MSG_IN_FLIGHT_MAX * c_n_pes,
       nullptr, NVSHMEM_CMP_GT, 0);
   if (msg_idx != SIZE_MAX) {
@@ -187,7 +189,7 @@ __device__ __forceinline__ void recv_msg(bool& begin_term_flag, bool &do_term_fl
     ringbuf_off_t mret = spsc_ringbuf_acquire(mbuf, src_size);
     assert(mret != -1 && mret < mbuf_size);
 
-    // Perform a remote get
+    // Perform a get operation to fetch the message
     // TODO: Make asynchronous
     nvshmem_char_get((char*)mbuf->addr(mret), (char*)src_addr, src_size, src_pe);
 
@@ -195,15 +197,36 @@ __device__ __forceinline__ void recv_msg(bool& begin_term_flag, bool &do_term_fl
     next_msg(mbuf->addr(mret), begin_term_flag, do_term_flag);
 
     // Clear message request
-    nvshmemx_signal_op(addr_arr + MSG_IN_FLIGHT_MAX * src_pe + msg_idx, 0,
+    nvshmemx_signal_op(addr_arr + MSG_IN_FLIGHT_MAX * src_pe + msg_idx, SIGNAL_FREE,
         NVSHMEM_SIGNAL_SET, c_my_pe);
 
     // Notify sender
-    nvshmemx_signal_op(used_arr + MSG_IN_FLIGHT_MAX * c_my_pe + msg_idx, 0,
+    nvshmemx_signal_op(used_arr + MSG_IN_FLIGHT_MAX * c_my_pe + msg_idx, SIGNAL_CLUP,
         NVSHMEM_SIGNAL_SET, src_pe);
   }
 
-  // TODO: Garbage collect
+  // Clean up completed messages
+  size_t count = nvshmem_uint64_test_some(used_arr, MSG_IN_FLIGHT_MAX * c_n_pes, indices_arr,
+      nullptr, NVSHMEM_CMP_EQ, SIGNAL_CLUP);
+  if (count > 0) {
+    for (size_t i = 0; i < count; i++) {
+#ifdef DEBUG
+      printf("PE %d cleaning up message index %llu\n", c_my_pe, indices_arr[i]);
+#endif
+      // TODO: Free message
+      // Need mapping from message index to address
+      /*
+      size_t len, off;
+      len = spsc_ringbuf_consume(mbuf, &off);
+      spsc_ringbuf_release(mbuf, len);
+      */
+
+      // Reset signal to SIGNAL_FREE
+      nvshmemx_signal_op(used_arr + indices_arr[i], SIGNAL_FREE,
+          NVSHMEM_SIGNAL_SET, c_my_pe);
+    }
+    memset(indices_arr, 0, MSG_IN_FLIGHT_MAX * c_n_pes * sizeof(size_t));
+  }
 }
 
 __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
