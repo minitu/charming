@@ -129,6 +129,9 @@ int main(int argc, char* argv[]) {
   cudaMemcpyToSymbolAsync(addr_arr, &h_addr_arr, sizeof(uint64_t*), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(size_arr, &h_size_arr, sizeof(uint64_t*), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(arr_size, &h_arr_size, sizeof(size_t), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemsetAsync(h_used_arr, 0, h_arr_size, stream);
+  cudaMemsetAsync(h_addr_arr, 0, h_arr_size, stream);
+  cudaMemsetAsync(h_size_arr, 0, h_arr_size, stream);
 
   cuda_check_error();
   /* This doesn't support CUDA dynamic parallelism, will it be a problem?

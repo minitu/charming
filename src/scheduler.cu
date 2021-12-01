@@ -176,7 +176,7 @@ __device__ __forceinline__ void recv_msg(bool& begin_term_flag, bool &do_term_fl
     // Found a message request, obtain source PE, buffer address and message size
     uint64_t src_addr = nvshmem_signal_fetch(addr_arr + msg_idx);
     uint64_t src_size = nvshmem_signal_fetch(size_arr + msg_idx);
-    int src_pe = msg_idx / c_n_pes;
+    int src_pe = msg_idx / MSG_IN_FLIGHT_MAX;
     msg_idx -= MSG_IN_FLIGHT_MAX * src_pe;
 #ifdef DEBUG
     printf("PE %d received message request from PE %d, message index %llu, addr %p, size %llu\n",
