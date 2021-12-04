@@ -21,12 +21,12 @@ __constant__ int c_n_pes;
 
 __device__ spsc_ringbuf_t* mbuf;
 __device__ size_t mbuf_size;
-__device__ uint64_t* used_arr;
-__device__ uint64_t* addr_arr;
-__device__ uint64_t* size_arr;
+__device__ uint64_t* signal_used;
+__device__ uint64_t* signal_addr;
+__device__ uint64_t* signal_size;
+__device__ uint64_t* send_addr;
 __device__ size_t* used_indices;
 __device__ size_t* addr_indices;
-__device__ size_t arr_size;
 
 __device__ chare_proxy_base* chare_proxies[CHARE_TYPE_CNT_MAX];
 __device__ int chare_proxy_cnt;
@@ -93,15 +93,17 @@ int main(int argc, char* argv[]) {
   size_t h_mbuf_size = 1073741824;
   spsc_ringbuf_t* h_mbuf = spsc_ringbuf_malloc(h_mbuf_size);
   size_t h_arr_size = MSG_IN_FLIGHT_MAX * h_n_pes * sizeof(uint64_t);
-  uint64_t* h_used_arr = (uint64_t*)nvshmem_malloc(h_arr_size);
-  uint64_t* h_addr_arr = (uint64_t*)nvshmem_malloc(h_arr_size);
-  uint64_t* h_size_arr = (uint64_t*)nvshmem_malloc(h_arr_size);
+  uint64_t* h_signal_used = (uint64_t*)nvshmem_malloc(h_arr_size);
+  uint64_t* h_signal_addr = (uint64_t*)nvshmem_malloc(h_arr_size);
+  uint64_t* h_signal_size = (uint64_t*)nvshmem_malloc(h_arr_size);
+  uint64_t* h_send_addr;
+  cudaMalloc(&h_send_addr, h_arr_size);
   size_t h_indices_size = MSG_IN_FLIGHT_MAX * h_n_pes * sizeof(size_t);
   uint64_t* h_used_indices;
   uint64_t* h_addr_indices;
   cudaMalloc(&h_used_indices, h_indices_size);
   cudaMalloc(&h_addr_indices, h_indices_size);
-  assert(h_used_arr && h_addr_arr && h_size_arr && h_used_indices && h_addr_indices);
+  assert(h_signal_used && h_signal_addr && h_signal_size && h_used_indices && h_addr_indices);
   cuda_check_error();
 
   // Synchronize all NVSHMEM PEs
@@ -132,15 +134,16 @@ int main(int argc, char* argv[]) {
   cudaMemcpyToSymbolAsync(c_n_pes, &h_n_pes, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(mbuf, &h_mbuf, sizeof(spsc_ringbuf_t*), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(mbuf_size, &h_mbuf_size, sizeof(size_t), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(used_arr, &h_used_arr, sizeof(uint64_t*), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(addr_arr, &h_addr_arr, sizeof(uint64_t*), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(size_arr, &h_size_arr, sizeof(uint64_t*), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(signal_used, &h_signal_used, sizeof(uint64_t*), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(signal_addr, &h_signal_addr, sizeof(uint64_t*), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(signal_size, &h_signal_size, sizeof(uint64_t*), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(send_addr, &h_send_addr, sizeof(uint64_t*), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(used_indices, &h_used_indices, sizeof(size_t*), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(addr_indices, &h_addr_indices, sizeof(size_t*), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(arr_size, &h_arr_size, sizeof(size_t), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemsetAsync(h_used_arr, 0, h_arr_size, stream);
-  cudaMemsetAsync(h_addr_arr, 0, h_arr_size, stream);
-  cudaMemsetAsync(h_size_arr, 0, h_arr_size, stream);
+  cudaMemsetAsync(h_signal_used, 0, h_arr_size, stream);
+  cudaMemsetAsync(h_signal_addr, 0, h_arr_size, stream);
+  cudaMemsetAsync(h_signal_size, 0, h_arr_size, stream);
+  cudaMemsetAsync(h_send_addr, 0, h_arr_size, stream);
   cudaMemsetAsync(h_used_indices, 0, h_indices_size, stream);
   cudaMemsetAsync(h_addr_indices, 0, h_indices_size, stream);
 
@@ -159,9 +162,10 @@ int main(int argc, char* argv[]) {
   nvshmem_barrier_all();
 
   // Cleanup
-  nvshmem_free(h_used_arr);
-  nvshmem_free(h_addr_arr);
-  nvshmem_free(h_size_arr);
+  nvshmem_free(h_signal_used);
+  nvshmem_free(h_signal_addr);
+  nvshmem_free(h_signal_size);
+  cudaFree(h_send_addr);
   cudaFree(h_used_indices);
   cudaFree(h_addr_indices);
   spsc_ringbuf_free(h_mbuf);
