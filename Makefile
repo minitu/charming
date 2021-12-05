@@ -12,12 +12,14 @@ HEADERS = include/$(TARGET).h \
           include/chare.h \
           src/msg_queue.h \
           src/ringbuf.h \
+          src/heap.h \
           src/util.h
 
 OBJS = $(BUILD_DIR)/$(TARGET).o \
        $(BUILD_DIR)/scheduler.o \
        $(BUILD_DIR)/msg_queue.o \
        $(BUILD_DIR)/ringbuf.o \
+       $(BUILD_DIR)/heap.o \
        $(BUILD_DIR)/util.o
 
 .PHONY: all

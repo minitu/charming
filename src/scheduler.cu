@@ -5,6 +5,7 @@
 #include "charming.h"
 #include "chare.h"
 #include "ringbuf.h"
+#include "heap.h"
 #include "util.h"
 
 using namespace charm;
@@ -20,6 +21,8 @@ extern __device__ uint64_t* signal_size;
 extern __device__ uint64_t* send_addr;
 extern __device__ size_t* used_indices;
 extern __device__ size_t* addr_indices;
+extern __device__ uint64_t* heap_buf;
+extern __device__ size_t heap_buf_size;
 
 extern __device__ chare_proxy_base* chare_proxies[];
 

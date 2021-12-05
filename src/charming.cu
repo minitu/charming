@@ -27,6 +27,8 @@ __device__ uint64_t* signal_size;
 __device__ uint64_t* send_addr;
 __device__ size_t* used_indices;
 __device__ size_t* addr_indices;
+__device__ uint64_t* heap_buf;
+__device__ size_t heap_buf_size;
 
 __device__ chare_proxy_base* chare_proxies[CHARE_TYPE_CNT_MAX];
 __device__ int chare_proxy_cnt;
@@ -90,6 +92,7 @@ int main(int argc, char* argv[]) {
   cudaDeviceProp prop;
   cudaGetDeviceProperties(&prop, 0);
   //size_t h_mbuf_size = prop.totalGlobalMem / 2;
+  // TODO
   size_t h_mbuf_size = 1073741824;
   spsc_ringbuf_t* h_mbuf = spsc_ringbuf_malloc(h_mbuf_size);
   size_t h_arr_size = MSG_IN_FLIGHT_MAX * h_n_pes * sizeof(uint64_t);
@@ -103,7 +106,11 @@ int main(int argc, char* argv[]) {
   uint64_t* h_addr_indices;
   cudaMalloc(&h_used_indices, h_indices_size);
   cudaMalloc(&h_addr_indices, h_indices_size);
-  assert(h_signal_used && h_signal_addr && h_signal_size && h_used_indices && h_addr_indices);
+  uint64_t* h_heap_buf;
+  size_t h_heap_buf_size = MSG_IN_FLIGHT_MAX * h_n_pes * 2 * sizeof(uint64_t);
+  cudaMalloc(&h_heap_buf, h_heap_buf_size);
+  assert(h_signal_used && h_signal_addr && h_signal_size && h_used_indices
+      && h_addr_indices && h_heap_buf);
   cuda_check_error();
 
   // Synchronize all NVSHMEM PEs
@@ -111,6 +118,7 @@ int main(int argc, char* argv[]) {
 
   // Change device limits
   size_t stack_size, heap_size;
+  // TODO
   //size_t new_heap_size = 8589934592; // Set max heap size to 8GB
   //cudaDeviceSetLimit(cudaLimitStackSize, 16384);
   cudaDeviceGetLimit(&stack_size, cudaLimitStackSize);
@@ -118,7 +126,7 @@ int main(int argc, char* argv[]) {
   cudaDeviceGetLimit(&heap_size, cudaLimitMallocHeapSize);
 
   // Print configuration and launch scheduler
-  /*
+  /* TODO
   int grid_size = prop.multiProcessorCount;
   int block_size = prop.maxThreadsPerBlock;
   */
@@ -140,12 +148,15 @@ int main(int argc, char* argv[]) {
   cudaMemcpyToSymbolAsync(send_addr, &h_send_addr, sizeof(uint64_t*), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(used_indices, &h_used_indices, sizeof(size_t*), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(addr_indices, &h_addr_indices, sizeof(size_t*), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(heap_buf, &h_heap_buf, sizeof(uint64_t*), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(heap_buf_size, &h_heap_buf_size, sizeof(size_t), 0, cudaMemcpyHostToDevice, stream);
   cudaMemsetAsync(h_signal_used, 0, h_arr_size, stream);
   cudaMemsetAsync(h_signal_addr, 0, h_arr_size, stream);
   cudaMemsetAsync(h_signal_size, 0, h_arr_size, stream);
   cudaMemsetAsync(h_send_addr, 0, h_arr_size, stream);
   cudaMemsetAsync(h_used_indices, 0, h_indices_size, stream);
   cudaMemsetAsync(h_addr_indices, 0, h_indices_size, stream);
+  cudaMemsetAsync(h_heap_buf, 0, h_heap_buf_size, stream);
 
   cuda_check_error();
   /* This doesn't support CUDA dynamic parallelism, will it be a problem?
@@ -168,6 +179,7 @@ int main(int argc, char* argv[]) {
   cudaFree(h_send_addr);
   cudaFree(h_used_indices);
   cudaFree(h_addr_indices);
+  cudaFree(h_heap_buf);
   spsc_ringbuf_free(h_mbuf);
   cudaStreamDestroy(stream);
   nvshmem_finalize();
