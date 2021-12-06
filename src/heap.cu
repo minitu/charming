@@ -83,7 +83,7 @@ __device__ uint64_t min_heap::pop() {
 __device__ void min_heap::print() {
   printf("Min-heap size: %llu, max: %llu\n", size, max_size);
   for (size_t i = 0; i < size; i++) {
-    printf("%llu \n", buf[i]);
+    printf("%p ", (void*)buf[i]);
   }
   printf("\n");
 }

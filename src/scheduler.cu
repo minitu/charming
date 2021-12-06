@@ -52,8 +52,8 @@ __device__ void charm::send_msg(envelope* env, size_t msg_size, int dst_pe) {
       nullptr, NVSHMEM_CMP_EQ, SIGNAL_FREE);
 #ifdef DEBUG
   assert(msg_idx != SIZE_MAX);
-  printf("PE %d sending message request to PE %d, local message index %llu (global %llu), addr %p, size %llu\n",
-      c_my_pe, dst_pe, msg_idx, offset + msg_idx, env, msg_size);
+  printf("PE %d sending message request: src addr %p, dst PE %d, idx %llu, size %llu\n",
+      c_my_pe, (void*)env, dst_pe, msg_idx, msg_size);
 #endif
   nvshmemx_signal_op(my_signal_used + msg_idx, SIGNAL_USED, NVSHMEM_SIGNAL_SET, c_my_pe);
 
@@ -174,7 +174,8 @@ __device__ __forceinline__ ssize_t next_msg(void* addr, bool& begin_term_flag,
   return env->size;
 }
 
-__device__ __forceinline__ void recv_msg(bool& begin_term_flag, bool &do_term_flag) {
+__device__ __forceinline__ void recv_msg(min_heap& addr_heap, bool& begin_term_flag,
+    bool &do_term_flag) {
   // Check if there are any message requests
   size_t count = nvshmem_uint64_test_some(signal_addr, MSG_IN_FLIGHT_MAX * c_n_pes,
       addr_indices, nullptr, NVSHMEM_CMP_GT, 0);
@@ -186,11 +187,6 @@ __device__ __forceinline__ void recv_msg(bool& begin_term_flag, bool &do_term_fl
       uint64_t src_size = nvshmem_signal_fetch(signal_size + msg_idx);
       int src_pe = msg_idx / MSG_IN_FLIGHT_MAX;
       msg_idx -= MSG_IN_FLIGHT_MAX * src_pe;
-#ifdef DEBUG
-      printf("PE %d received message request from PE %d, local message index %llu "
-          "(global %llu), addr %p, size %llu\n", c_my_pe, src_pe, msg_idx,
-          MSG_IN_FLIGHT_MAX * src_pe + msg_idx, (void*)src_addr, src_size);
-#endif
 
       // Reserve space for incoming message
       ringbuf_off_t mret = spsc_ringbuf_acquire(mbuf, src_size);
@@ -198,6 +194,10 @@ __device__ __forceinline__ void recv_msg(bool& begin_term_flag, bool &do_term_fl
 
       // Perform a get operation to fetch the message
       // TODO: Make asynchronous
+#ifdef DEBUG
+      printf("PE %d receiving message: src addr %p, dst addr %p, src PE %d, idx %llu, size %llu\n",
+          c_my_pe, (void*)src_addr, mbuf->addr(mret), src_pe, msg_idx, src_size);
+#endif
       nvshmem_char_get((char*)mbuf->addr(mret), (char*)src_addr, src_size, src_pe);
 
       // Process message
@@ -206,6 +206,13 @@ __device__ __forceinline__ void recv_msg(bool& begin_term_flag, bool &do_term_fl
       // Clear message request
       nvshmemx_signal_op(signal_addr + MSG_IN_FLIGHT_MAX * src_pe + msg_idx,
           SIGNAL_FREE, NVSHMEM_SIGNAL_SET, c_my_pe);
+
+      // Store address of this message to be cleared from memory
+      addr_heap.push((uint64_t)mbuf->addr(mret));
+#ifdef DEBUG
+      printf("PE %d flagging message for cleanup: dst addr %p, src PE %d, idx %llu, size %llu\n",
+          c_my_pe, mbuf->addr(mret), src_pe, msg_idx, src_size);
+#endif
 
       // Notify sender that message is ready for cleanup
       nvshmemx_signal_op(signal_used + MSG_IN_FLIGHT_MAX * c_my_pe + msg_idx,
@@ -216,23 +223,20 @@ __device__ __forceinline__ void recv_msg(bool& begin_term_flag, bool &do_term_fl
     memset(addr_indices, 0, MSG_IN_FLIGHT_MAX * c_n_pes * sizeof(size_t));
   }
 
-  // Clean up completed messages
+  // Check for messages that have been delivered to the destination PE
   count = nvshmem_uint64_test_some(signal_used, MSG_IN_FLIGHT_MAX * c_n_pes,
       used_indices, nullptr, NVSHMEM_CMP_EQ, SIGNAL_CLUP);
   if (count > 0) {
     for (size_t i = 0; i < count; i++) {
       size_t msg_idx = used_indices[i];
+
+      // Store address of this message to be cleared from memory
+      addr_heap.push(send_addr[msg_idx]);
 #ifdef DEBUG
-      printf("PE %d cleaning up global message index %llu\n", c_my_pe, msg_idx);
+      printf("PE %d flagging message for cleanup: src addr %p, dst PE %llu, idx %llu\n",
+          c_my_pe, (void*)send_addr[msg_idx], msg_idx / MSG_IN_FLIGHT_MAX,
+          msg_idx % MSG_IN_FLIGHT_MAX);
 #endif
-      uint64_t src_addr = send_addr[msg_idx];
-      // TODO: Free message
-      // Need mapping from message index to address
-      /*
-      size_t len, off;
-      len = spsc_ringbuf_consume(mbuf, &off);
-      spsc_ringbuf_release(mbuf, len);
-      */
 
       // Reset signal to SIGNAL_FREE
       nvshmemx_signal_op(signal_used + msg_idx, SIGNAL_FREE,
@@ -246,6 +250,7 @@ __device__ __forceinline__ void recv_msg(bool& begin_term_flag, bool &do_term_fl
 
 __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
   if (!blockIdx.x && !threadIdx.x) {
+    min_heap addr_heap(heap_buf, heap_buf_size / sizeof(uint64_t));
     bool begin_term_flag = false;
     bool do_term_flag = false;
 
@@ -267,7 +272,7 @@ __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
 
     // Receive messages and terminate
     do {
-      recv_msg(begin_term_flag, do_term_flag);
+      recv_msg(addr_heap, begin_term_flag, do_term_flag);
     } while (!do_term_flag);
 
 #if DEBUG

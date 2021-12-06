@@ -10,7 +10,7 @@ struct min_heap {
   size_t max_size;
 
   __device__ min_heap(uint64_t* buf_, size_t max_size_)
-    : size(0), buf(buf_), max_size(max_size_) {}
+    : buf(buf_), size(0), max_size(max_size_) {}
 
   __device__ __forceinline__ int left(int idx) { return (idx * 2 + 1); }
   __device__ __forceinline__ int right(int idx) { return (idx * 2 + 2); }
