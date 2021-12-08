@@ -165,14 +165,15 @@ struct chare_proxy : chare_proxy_base {
         // Payload includes chare-PE map and packed seed object
         size_t payload_size = sizeof(int) * n + obj.pack_size();
         size_t msg_size = envelope::alloc_size(sizeof(create_msg) + payload_size);
-        envelope* env = create_envelope(msgtype::create, msg_size);
+        size_t offset;
+        envelope* env = create_envelope(msgtype::create, msg_size, &offset);
         create_msg* msg = new ((char*)env + sizeof(envelope)) create_msg(id, n_this, n, start_idx_, end_idx_);
         char* tmp = (char*)msg + sizeof(create_msg);
         memcpy(tmp, loc_map, sizeof(int) * n);
         tmp += sizeof(int) * n;
         obj.pack(tmp);
 
-        send_msg(env, msg_size, pe);
+        send_msg(offset, msg_size, pe);
       }
 
       // Update start chare index
