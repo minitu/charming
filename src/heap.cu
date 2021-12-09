@@ -1,13 +1,13 @@
 #include <stdio.h>
 #include "heap.h"
 
-__device__ __forceinline__ void swap(alloy* x, alloy* y) {
-  alloy tmp = *x;
+__device__ __forceinline__ void swap(composite_t* x, composite_t* y) {
+  composite_t tmp = *x;
   *x = *y;
   *y = tmp;
 }
 
-__device__ int min_heap::push(const alloy& key) {
+__device__ int min_heap::push(const composite_t& key) {
   if (size >= max_size) return -1;
 
   // Insert key at the end and heapify bottom-up
@@ -26,11 +26,11 @@ __device__ int min_heap::push(const alloy& key) {
   return 0;
 }
 
-__device__ alloy min_heap::pop() {
+__device__ composite_t min_heap::pop() {
   if (size == 0) return UINT64_MAX;
 
   // Should return value at root
-  alloy ret = buf[0];
+  composite_t ret = buf[0];
   // Move last element to root and heapify
   buf[0] = buf[size-1];
   size--;
@@ -39,12 +39,12 @@ __device__ alloy min_heap::pop() {
     bool left_exist = (left(cur) < size);
     bool right_exist = (right(cur) < size);
     if (!left_exist && !right_exist) break;
-    alloy left_val = left_exist ? buf[left(cur)] : alloy(UINT64_MAX);
-    alloy right_val = right_exist ? buf[right(cur)] : alloy(UINT64_MAX);
+    composite_t left_val = left_exist ? buf[left(cur)] : composite_t(UINT64_MAX);
+    composite_t right_val = right_exist ? buf[right(cur)] : composite_t(UINT64_MAX);
     bool left_smaller = left_val < right_val;
     size_t smaller_idx = left_smaller ? left(cur) : right(cur);;
-    alloy min_val = left_smaller ? left_val : right_val;
-    alloy cur_val = buf[cur];
+    composite_t min_val = left_smaller ? left_val : right_val;
+    composite_t cur_val = buf[cur];
     if (cur_val < min_val) break;
     else {
       swap(&buf[cur], &buf[smaller_idx]);

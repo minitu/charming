@@ -13,7 +13,7 @@ HEADERS = include/$(TARGET).h \
           src/msg_queue.h \
           src/ringbuf.h \
           src/heap.h \
-          src/alloy.h \
+          src/composite.h \
           src/util.h
 
 OBJS = $(BUILD_DIR)/$(TARGET).o \

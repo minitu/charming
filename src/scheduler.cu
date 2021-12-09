@@ -16,11 +16,11 @@ extern __constant__ int c_n_pes;
 extern __device__ spsc_ringbuf_t* mbuf;
 extern __device__ size_t mbuf_size;
 extern __device__ uint64_t* send_status;
-extern __device__ uint64_t* recv_alloy;
-extern __device__ uint64_t* send_alloy;
+extern __device__ uint64_t* recv_composite;
+extern __device__ uint64_t* send_composite;
 extern __device__ size_t* send_status_idx;
-extern __device__ size_t* recv_alloy_idx;
-extern __device__ alloy* heap_buf;
+extern __device__ size_t* recv_composite_idx;
+extern __device__ composite_t* heap_buf;
 extern __device__ size_t heap_buf_size;
 
 extern __device__ chare_proxy_base* chare_proxies[];
@@ -52,19 +52,19 @@ __device__ void charm::send_msg(size_t offset, size_t msg_size, int dst_pe) {
       nullptr, NVSHMEM_CMP_EQ, SIGNAL_FREE);
   nvshmemx_signal_op(my_send_status + msg_idx, SIGNAL_USED, NVSHMEM_SIGNAL_SET, c_my_pe);
 
-  // Send alloy of source buffer (offset & size)
+  // Send composite of source buffer (offset & size)
   signal_offset = MSG_IN_FLIGHT_MAX * c_my_pe;
-  uint64_t* my_recv_alloy = recv_alloy + signal_offset;
-  alloy src_alloy(offset, msg_size);
-  nvshmemx_signal_op(my_recv_alloy + msg_idx, src_alloy.data, NVSHMEM_SIGNAL_SET, dst_pe);
+  uint64_t* my_recv_composite = recv_composite + signal_offset;
+  composite_t src_composite(offset, msg_size);
+  nvshmemx_signal_op(my_recv_composite + msg_idx, src_composite.data, NVSHMEM_SIGNAL_SET, dst_pe);
 #ifdef DEBUG
   assert(msg_idx != SIZE_MAX);
   printf("PE %d sending message request: src addr %p, dst PE %d, idx %llu, size %llu\n",
       c_my_pe, (void*)mbuf->addr(offset), dst_pe, msg_idx, msg_size);
 #endif
 
-  // Store source alloy for later cleanup
-  send_alloy[signal_offset + msg_idx] = src_alloy.data;
+  // Store source composite for later cleanup
+  send_composite[signal_offset + msg_idx] = src_composite.data;
 }
 
 __device__ void charm::send_dummy_msg(int dst_pe) {
@@ -179,16 +179,16 @@ __device__ __forceinline__ ssize_t next_msg(void* addr, bool& begin_term_flag,
 __device__ __forceinline__ void recv_msg(min_heap& addr_heap, bool& begin_term_flag,
     bool &do_term_flag) {
   // Check if there are any message requests
-  size_t count = nvshmem_uint64_test_some(recv_alloy, MSG_IN_FLIGHT_MAX * c_n_pes,
-      recv_alloy_idx, nullptr, NVSHMEM_CMP_GT, 0);
+  size_t count = nvshmem_uint64_test_some(recv_composite, MSG_IN_FLIGHT_MAX * c_n_pes,
+      recv_composite_idx, nullptr, NVSHMEM_CMP_GT, 0);
   if (count > 0) {
     for (size_t i = 0; i < count; i++) {
       // Obtain information about this message request
-      size_t msg_idx = recv_alloy_idx[i];
-      uint64_t data = nvshmem_signal_fetch(recv_alloy + msg_idx);
-      alloy src_alloy(data);
-      size_t src_offset = src_alloy.offset();
-      size_t src_size = src_alloy.size();
+      size_t msg_idx = recv_composite_idx[i];
+      uint64_t data = nvshmem_signal_fetch(recv_composite + msg_idx);
+      composite_t src_composite(data);
+      size_t src_offset = src_composite.offset();
+      size_t src_size = src_composite.size();
       int src_pe = msg_idx / MSG_IN_FLIGHT_MAX;
       msg_idx -= MSG_IN_FLIGHT_MAX * src_pe;
 
@@ -208,11 +208,11 @@ __device__ __forceinline__ void recv_msg(min_heap& addr_heap, bool& begin_term_f
       next_msg(mbuf->addr(mret), begin_term_flag, do_term_flag);
 
       // Clear message request
-      nvshmemx_signal_op(recv_alloy + MSG_IN_FLIGHT_MAX * src_pe + msg_idx,
+      nvshmemx_signal_op(recv_composite + MSG_IN_FLIGHT_MAX * src_pe + msg_idx,
           SIGNAL_FREE, NVSHMEM_SIGNAL_SET, c_my_pe);
 
-      // Store alloy to be cleared from memory
-      addr_heap.push(src_alloy);
+      // Store composite to be cleared from memory
+      addr_heap.push(src_composite);
 #ifdef DEBUG
       printf("PE %d flagging message for cleanup: dst addr %p, src PE %d, idx %llu, size %llu\n",
           c_my_pe, mbuf->addr(mret), src_pe, msg_idx, src_size);
@@ -224,7 +224,7 @@ __device__ __forceinline__ void recv_msg(min_heap& addr_heap, bool& begin_term_f
     }
 
     // Reset indices array for next use
-    memset(recv_alloy_idx, 0, MSG_IN_FLIGHT_MAX * c_n_pes * sizeof(size_t));
+    memset(recv_composite_idx, 0, MSG_IN_FLIGHT_MAX * c_n_pes * sizeof(size_t));
   }
 
   // Check for messages that have been delivered to the destination PE
@@ -234,12 +234,12 @@ __device__ __forceinline__ void recv_msg(min_heap& addr_heap, bool& begin_term_f
     for (size_t i = 0; i < count; i++) {
       size_t msg_idx = send_status_idx[i];
 
-      // Store alloy to be cleared from memory
-      alloy src_alloy(send_alloy[msg_idx]);
-      addr_heap.push(src_alloy);
+      // Store composite to be cleared from memory
+      composite_t src_composite(send_composite[msg_idx]);
+      addr_heap.push(src_composite);
 #ifdef DEBUG
       printf("PE %d flagging message for cleanup: src offset %llu, size %llu, "
-          "dst PE %llu, idx %llu\n", c_my_pe, src_alloy.offset(), src_alloy.size(),
+          "dst PE %llu, idx %llu\n", c_my_pe, src_composite.offset(), src_composite.size(),
           msg_idx / MSG_IN_FLIGHT_MAX, msg_idx % MSG_IN_FLIGHT_MAX);
 #endif
 
