@@ -10,7 +10,6 @@ HEADERS = include/$(TARGET).h \
           include/message.h \
           include/scheduler.h \
           include/chare.h \
-          src/msg_queue.h \
           src/ringbuf.h \
           src/heap.h \
           src/composite.h \
@@ -18,7 +17,6 @@ HEADERS = include/$(TARGET).h \
 
 OBJS = $(BUILD_DIR)/$(TARGET).o \
        $(BUILD_DIR)/scheduler.o \
-       $(BUILD_DIR)/msg_queue.o \
        $(BUILD_DIR)/ringbuf.o \
        $(BUILD_DIR)/heap.o \
        $(BUILD_DIR)/util.o
