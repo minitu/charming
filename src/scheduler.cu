@@ -13,7 +13,7 @@ using namespace charm;
 extern __constant__ int c_my_pe;
 extern __constant__ int c_n_pes;
 
-extern __device__ spsc_ringbuf_t* mbuf;
+extern __device__ ringbuf_t* mbuf;
 extern __device__ size_t mbuf_size;
 extern __device__ uint64_t* send_status;
 extern __device__ uint64_t* recv_composite;
@@ -33,7 +33,7 @@ enum {
 
 __device__ envelope* charm::create_envelope(msgtype type, size_t msg_size, size_t* offset) {
   // Reserve space for this message in message buffer
-  ringbuf_off_t mret = spsc_ringbuf_acquire(mbuf, msg_size);
+  ringbuf_off_t mret = mbuf->acquire(msg_size);
   assert(mret != -1 && mret < mbuf_size);
   *offset = mret;
 
@@ -42,9 +42,6 @@ __device__ envelope* charm::create_envelope(msgtype type, size_t msg_size, size_
 }
 
 __device__ void charm::send_msg(size_t offset, size_t msg_size, int dst_pe) {
-  // Message is ready to be sent
-  spsc_ringbuf_produce(mbuf);
-
   // Obtain a message index for the target PE and set the corresponding used signal
   size_t signal_offset = MSG_IN_FLIGHT_MAX * dst_pe;
   uint64_t* my_send_status = send_status + signal_offset;
@@ -193,7 +190,7 @@ __device__ __forceinline__ void recv_msg(min_heap& addr_heap, bool& begin_term_f
       msg_idx -= MSG_IN_FLIGHT_MAX * src_pe;
 
       // Reserve space for incoming message
-      ringbuf_off_t mret = spsc_ringbuf_acquire(mbuf, src_size);
+      ringbuf_off_t mret = mbuf->acquire(src_size);
       assert(mret != -1 && mret < mbuf_size);
 
       // Perform a get operation to fetch the message
@@ -262,9 +259,6 @@ __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
     // Register user chares and entry methods on all PEs
     chare_proxy_cnt = 0;
     register_chares();
-
-    // Initialize message queue
-    spsc_ringbuf_init(mbuf, mbuf_size);
 
     nvshmem_barrier_all();
 

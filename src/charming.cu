@@ -20,7 +20,7 @@ using namespace charm;
 __constant__ int c_my_pe;
 __constant__ int c_n_pes;
 
-__device__ spsc_ringbuf_t* mbuf;
+__device__ ringbuf_t* mbuf;
 __device__ size_t mbuf_size;
 __device__ uint64_t* send_status;
 __device__ uint64_t* recv_composite;
@@ -88,13 +88,20 @@ int main(int argc, char* argv[]) {
   cudaMemcpyAsync(d_argv, h_argv, sizeof(char*) * argc, cudaMemcpyHostToDevice, stream);
   cuda_check_error();
 
-  // Allocate message buffer and signal arrays using NVSHMEM
+  // Allocate message buffer
   cudaDeviceProp prop;
   cudaGetDeviceProperties(&prop, 0);
   //size_t h_mbuf_size = prop.totalGlobalMem / 2;
   // TODO
   size_t h_mbuf_size = 1073741824;
-  spsc_ringbuf_t* h_mbuf = spsc_ringbuf_malloc(h_mbuf_size);
+  ringbuf_t* h_mbuf;
+  ringbuf_t* h_mbuf_d;
+  cudaMallocHost(&h_mbuf, sizeof(ringbuf_t));
+  cudaMalloc(&h_mbuf_d, sizeof(ringbuf_t));
+  assert(h_mbuf && h_mbuf_d);
+  h_mbuf->init(h_mbuf_size);
+
+  // Allocate data structures
   size_t h_status_size = MSG_IN_FLIGHT_MAX * h_n_pes * sizeof(uint64_t);
   uint64_t* h_send_status = (uint64_t*)nvshmem_malloc(h_status_size);
   size_t h_composite_size = MSG_IN_FLIGHT_MAX * h_n_pes * sizeof(uint64_t);
@@ -140,7 +147,8 @@ int main(int argc, char* argv[]) {
   }
   cudaMemcpyToSymbolAsync(c_my_pe, &h_my_pe, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(c_n_pes, &h_n_pes, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(mbuf, &h_mbuf, sizeof(spsc_ringbuf_t*), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyAsync(h_mbuf_d, h_mbuf, sizeof(ringbuf_t), cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(mbuf, &h_mbuf_d, sizeof(ringbuf_t*), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(mbuf_size, &h_mbuf_size, sizeof(size_t), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(send_status, &h_send_status, sizeof(uint64_t*), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(recv_composite, &h_recv_composite, sizeof(uint64_t*), 0, cudaMemcpyHostToDevice, stream);
@@ -177,7 +185,7 @@ int main(int argc, char* argv[]) {
   cudaFree(h_send_status_idx);
   cudaFree(h_recv_composite_idx);
   cudaFree(h_heap_buf);
-  spsc_ringbuf_free(h_mbuf);
+  h_mbuf->fini();
   cudaStreamDestroy(stream);
   nvshmem_finalize();
   MPI_Finalize();
