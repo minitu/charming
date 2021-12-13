@@ -6,8 +6,8 @@
 
 #define OFFSET_BITS 36
 #define SIZE_BITS   28
-#define OFFSET_MASK 0xFFFFFFFFF0000000 // 36 bits
-#define SIZE_MASK   0x000000000FFFFFFF // 28 bits
+#define OFFSET_MASK 0xFFFFFFFFF0000000UL // 36 bits
+#define SIZE_MASK   0x000000000FFFFFFFUL // 28 bits
 
 // Stores both the offset and size of a buffer
 // by splitting a 64-bit unsigned integer. Used for
