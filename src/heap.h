@@ -20,6 +20,7 @@ struct min_heap {
 
   // TODO: Use a generalized heap for vector operations
   __device__ int push(const composite_t& key);
+  __device__ composite_t top();
   __device__ composite_t pop();
   __device__ void print();
 };

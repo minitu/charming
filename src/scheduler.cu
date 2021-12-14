@@ -33,35 +33,43 @@ enum {
 
 __device__ envelope* charm::create_envelope(msgtype type, size_t msg_size, size_t* offset) {
   // Reserve space for this message in message buffer
-  ringbuf_off_t mret = mbuf->acquire(msg_size);
-  assert(mret != -1 && mret < mbuf_size);
-  *offset = mret;
+  ringbuf_off_t mbuf_off = mbuf->acquire(msg_size);
+  if (mbuf_off == -1) {
+    printf("PE %d error: Not enough space in message buffer\n", c_my_pe);
+    assert(false);
+  }
+#ifdef DEBUG
+  printf("PE %d acquired message: offset %llu, size %llu\n", c_my_pe, mbuf_off, msg_size);
+#endif
+  *offset = mbuf_off;
 
   // Create envelope
-  return new (mbuf->addr(mret)) envelope(type, msg_size, c_my_pe);
+  return new (mbuf->addr(mbuf_off)) envelope(type, msg_size, c_my_pe);
 }
 
 __device__ void charm::send_msg(size_t offset, size_t msg_size, int dst_pe) {
   // Obtain a message index for the target PE and set the corresponding used signal
-  size_t signal_offset = MSG_IN_FLIGHT_MAX * dst_pe;
-  uint64_t* my_send_status = send_status + signal_offset;
+  size_t send_offset = MSG_IN_FLIGHT_MAX * dst_pe;
+  uint64_t* my_send_status = send_status + send_offset;
   size_t msg_idx = nvshmem_uint64_wait_until_any(my_send_status, MSG_IN_FLIGHT_MAX,
       nullptr, NVSHMEM_CMP_EQ, SIGNAL_FREE);
-  nvshmemx_signal_op(my_send_status + msg_idx, SIGNAL_USED, NVSHMEM_SIGNAL_SET, c_my_pe);
+  nvshmemx_signal_op(my_send_status + msg_idx, SIGNAL_USED,
+      NVSHMEM_SIGNAL_SET, c_my_pe);
 
   // Send composite of source buffer (offset & size)
-  signal_offset = MSG_IN_FLIGHT_MAX * c_my_pe;
-  uint64_t* my_recv_composite = recv_composite + signal_offset;
+  size_t recv_offset = MSG_IN_FLIGHT_MAX * c_my_pe;
+  uint64_t* my_recv_composite = recv_composite + recv_offset;
   composite_t src_composite(offset, msg_size);
-  nvshmemx_signal_op(my_recv_composite + msg_idx, src_composite.data, NVSHMEM_SIGNAL_SET, dst_pe);
+  nvshmemx_signal_op(my_recv_composite + msg_idx, src_composite.data,
+      NVSHMEM_SIGNAL_SET, dst_pe);
 #ifdef DEBUG
   assert(msg_idx != SIZE_MAX);
-  printf("PE %d sending message request: src addr %p, dst PE %d, idx %llu, size %llu\n",
-      c_my_pe, (void*)mbuf->addr(offset), dst_pe, msg_idx, msg_size);
+  printf("PE %d sending message request: offset %llu, size %llu, dst PE %d, idx %llu\n",
+      c_my_pe, offset, msg_size, dst_pe, msg_idx);
 #endif
 
   // Store source composite for later cleanup
-  send_composite[signal_offset + msg_idx] = src_composite.data;
+  send_composite[send_offset + msg_idx] = src_composite.data;
 }
 
 __device__ void charm::send_dummy_msg(int dst_pe) {
@@ -78,7 +86,8 @@ __device__ void charm::send_reg_msg(int chare_id, int chare_idx, int ep_id,
   size_t offset;
   envelope* env = create_envelope(msgtype::regular, msg_size, &offset);
 
-  regular_msg* msg = new ((char*)env + sizeof(envelope)) regular_msg(chare_id, chare_idx, ep_id);
+  regular_msg* msg = new ((char*)env + sizeof(envelope)) regular_msg(chare_id,
+      chare_idx, ep_id);
 
   // Fill in payload (from regular GPU memory to NVSHMEM symmetric memory)
   if (payload_size > 0) {
@@ -112,7 +121,7 @@ __device__ __forceinline__ ssize_t next_msg(void* addr, bool& begin_term_flag,
   envelope* env = (envelope*)addr;
 #ifdef DEBUG
   printf("PE %d received msg type %d size %llu from PE %d\n",
-         nvshmem_my_pe(), env->type, env->size, env->src_pe);
+         c_my_pe, env->type, env->size, env->src_pe);
 #endif
 
   if (env->type == msgtype::dummy) {
@@ -128,8 +137,9 @@ __device__ __forceinline__ ssize_t next_msg(void* addr, bool& begin_term_flag,
     // Creation message
     create_msg* msg = (create_msg*)((char*)env + sizeof(envelope));
 #ifdef DEBUG
-    printf("PE %d creation msg chare ID %d, n_local %d, n_total %d, start idx %d, end idx %d\n",
-           nvshmem_my_pe(), msg->chare_id, msg->n_local, msg->n_total, msg->start_idx, msg->end_idx);
+    printf("PE %d creation msg chare ID %d, n_local %d, n_total %d, "
+        "start idx %d, end idx %d\n", c_my_pe, msg->chare_id, msg->n_local,
+        msg->n_total, msg->start_idx, msg->end_idx);
 #endif
     chare_proxy_base*& chare_proxy = chare_proxies[msg->chare_id];
     chare_proxy->alloc(msg->n_local, msg->n_total, msg->start_idx, msg->end_idx);
@@ -143,7 +153,8 @@ __device__ __forceinline__ ssize_t next_msg(void* addr, bool& begin_term_flag,
     // Regular message
     regular_msg* msg = (regular_msg*)((char*)env + sizeof(envelope));
 #ifdef DEBUG
-    printf("PE %d regular msg chare ID %d chare idx %d EP ID %d\n", nvshmem_my_pe(), msg->chare_id, msg->chare_idx, msg->ep_id);
+    printf("PE %d regular msg chare ID %d chare idx %d EP ID %d\n", c_my_pe,
+        msg->chare_id, msg->chare_idx, msg->ep_id);
 #endif
     chare_proxy_base*& chare_proxy = chare_proxies[msg->chare_id];
     void* payload = (char*)msg + sizeof(regular_msg);
@@ -154,7 +165,7 @@ __device__ __forceinline__ ssize_t next_msg(void* addr, bool& begin_term_flag,
     assert(my_pe() == 0);
     // Begin termination message
 #ifdef DEBUG
-    printf("PE %d begin terminate msg\n", nvshmem_my_pe());
+    printf("PE %d begin terminate msg\n", c_my_pe);
 #endif
     if (!begin_term_flag) {
       for (int i = 0; i < n_pes(); i++) {
@@ -165,7 +176,7 @@ __device__ __forceinline__ ssize_t next_msg(void* addr, bool& begin_term_flag,
   } else if (env->type == msgtype::do_terminate) {
     // Do termination message
 #ifdef DEBUG
-    printf("PE %d do terminate msg\n", nvshmem_my_pe());
+    printf("PE %d do terminate msg\n", c_my_pe);
 #endif
     do_term_flag = true;
   }
@@ -185,34 +196,46 @@ __device__ __forceinline__ void recv_msg(min_heap& addr_heap, bool& begin_term_f
       uint64_t data = nvshmem_signal_fetch(recv_composite + msg_idx);
       composite_t src_composite(data);
       size_t src_offset = src_composite.offset();
-      size_t src_size = src_composite.size();
+      size_t msg_size = src_composite.size();
       int src_pe = msg_idx / MSG_IN_FLIGHT_MAX;
       msg_idx -= MSG_IN_FLIGHT_MAX * src_pe;
 
       // Reserve space for incoming message
-      ringbuf_off_t mret = mbuf->acquire(src_size);
-      assert(mret != -1 && mret < mbuf_size);
+      ringbuf_off_t dst_offset = mbuf->acquire(msg_size);
+      if (dst_offset == -1) {
+        printf("PE %d error: Not enough space in message buffer\n", c_my_pe);
+        assert(false);
+      }
+#ifdef DEBUG
+  printf("PE %d acquired message: offset %llu, size %llu\n",
+      c_my_pe, dst_offset, msg_size);
+#endif
 
       // Perform a get operation to fetch the message
       // TODO: Make asynchronous
-      nvshmem_char_get((char*)mbuf->addr(mret), (char*)mbuf->addr(src_offset), src_size, src_pe);
+      void* dst_addr = mbuf->addr(dst_offset);
+      nvshmem_char_get((char*)dst_addr, (char*)mbuf->addr(src_offset),
+          msg_size, src_pe);
 #ifdef DEBUG
-      printf("PE %d receiving message: src addr %p, dst addr %p, src PE %d, idx %llu, size %llu\n",
-          c_my_pe, (void*)mbuf->addr(src_offset), (void*)mbuf->addr(mret), src_pe, msg_idx, src_size);
+      printf("PE %d receiving message: src offset %llu, dst offset %llu, "
+          "size %llu, src PE %d, idx %llu\n", c_my_pe, src_offset, dst_offset,
+          msg_size, src_pe, msg_idx);
 #endif
 
       // Process message
-      next_msg(mbuf->addr(mret), begin_term_flag, do_term_flag);
+      next_msg(dst_addr, begin_term_flag, do_term_flag);
 
       // Clear message request
       nvshmemx_signal_op(recv_composite + MSG_IN_FLIGHT_MAX * src_pe + msg_idx,
           SIGNAL_FREE, NVSHMEM_SIGNAL_SET, c_my_pe);
 
       // Store composite to be cleared from memory
-      addr_heap.push(src_composite);
+      composite_t dst_composite(dst_offset, msg_size);
+      addr_heap.push(dst_composite);
 #ifdef DEBUG
-      printf("PE %d flagging message for cleanup: dst addr %p, src PE %d, idx %llu, size %llu\n",
-          c_my_pe, mbuf->addr(mret), src_pe, msg_idx, src_size);
+      printf("PE %d flagging received message for cleanup: offset %llu, "
+          "size %llu, src PE %d, idx %llu\n", c_my_pe, dst_composite.offset(),
+          dst_composite.size(), src_pe, msg_idx);
 #endif
 
       // Notify sender that message is ready for cleanup
@@ -235,9 +258,10 @@ __device__ __forceinline__ void recv_msg(min_heap& addr_heap, bool& begin_term_f
       composite_t src_composite(send_composite[msg_idx]);
       addr_heap.push(src_composite);
 #ifdef DEBUG
-      printf("PE %d flagging message for cleanup: src offset %llu, size %llu, "
-          "dst PE %llu, idx %llu\n", c_my_pe, src_composite.offset(), src_composite.size(),
-          msg_idx / MSG_IN_FLIGHT_MAX, msg_idx % MSG_IN_FLIGHT_MAX);
+      printf("PE %d flagging sent message for cleanup: offset %llu, size %llu, "
+          "dst PE %llu, idx %llu\n", c_my_pe, src_composite.offset(),
+          src_composite.size(), msg_idx / MSG_IN_FLIGHT_MAX,
+          msg_idx % MSG_IN_FLIGHT_MAX);
 #endif
 
       // Reset signal to SIGNAL_FREE
@@ -247,6 +271,23 @@ __device__ __forceinline__ void recv_msg(min_heap& addr_heap, bool& begin_term_f
 
     // Reset indices array for next use
     memset(send_status_idx, 0, MSG_IN_FLIGHT_MAX * c_n_pes * sizeof(size_t));
+  }
+
+  // Clean up messages
+  while (true) {
+    composite_t comp = addr_heap.top();
+    if (comp.data == UINT64_MAX) break;
+
+    size_t clup_offset = comp.offset();
+    size_t clup_size = comp.size();
+    if (clup_offset == mbuf->read && clup_size > 0) {
+      mbuf->release(clup_size);
+      addr_heap.pop();
+#ifdef DEBUG
+      printf("PE %d releasing message: offset %llu, size %llu\n",
+          c_my_pe, clup_offset, clup_size);
+#endif
+    } else break;
   }
 }
 
@@ -267,7 +308,8 @@ __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
       main(argc, argv, argvs);
     }
 
-    nvshmem_barrier_all(); // FIXME: No need?
+    // FIXME: Is this barrier necessary?
+    nvshmem_barrier_all();
 
     // Receive messages and terminate
     do {

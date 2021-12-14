@@ -26,6 +26,12 @@ __device__ int min_heap::push(const composite_t& key) {
   return 0;
 }
 
+__device__ composite_t min_heap::top() {
+  if (size == 0) return UINT64_MAX;
+
+  return buf[0];
+}
+
 __device__ composite_t min_heap::pop() {
   if (size == 0) return UINT64_MAX;
 
