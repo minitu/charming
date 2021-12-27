@@ -113,8 +113,8 @@ __device__ void charm::send_do_term_msg(int dst_pe) {
   send_msg(offset, msg_size, dst_pe);
 }
 
-__device__ __forceinline__ ssize_t next_msg(void* addr, bool& begin_term_flag,
-                                            bool& do_term_flag) {
+__device__ __forceinline__ ssize_t process_msg(void* addr, bool& begin_term_flag,
+                                               bool& do_term_flag) {
   static int dummy_cnt = 0;
   static clock_value_t start;
   static clock_value_t end;
@@ -184,8 +184,8 @@ __device__ __forceinline__ ssize_t next_msg(void* addr, bool& begin_term_flag,
   return env->size;
 }
 
-__device__ __forceinline__ void recv_msg(min_heap& addr_heap, bool& begin_term_flag,
-    bool &do_term_flag) {
+__device__ __forceinline__ void loop(min_heap& addr_heap, bool& begin_term_flag,
+                                     bool &do_term_flag) {
   // Check if there are any message requests
   size_t count = nvshmem_uint64_test_some(recv_composite, MSG_IN_FLIGHT_MAX * c_n_pes,
       recv_composite_idx, nullptr, NVSHMEM_CMP_GT, 0);
@@ -223,7 +223,7 @@ __device__ __forceinline__ void recv_msg(min_heap& addr_heap, bool& begin_term_f
 #endif
 
       // Process message
-      next_msg(dst_addr, begin_term_flag, do_term_flag);
+      process_msg(dst_addr, begin_term_flag, do_term_flag);
 
       // Clear message request
       nvshmemx_signal_op(recv_composite + MSG_IN_FLIGHT_MAX * src_pe + msg_idx,
@@ -311,9 +311,9 @@ __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
     // FIXME: Is this barrier necessary?
     nvshmem_barrier_all();
 
-    // Receive messages and terminate
+    // Loop until termination
     do {
-      recv_msg(addr_heap, begin_term_flag, do_term_flag);
+      loop(addr_heap, begin_term_flag, do_term_flag);
     } while (!do_term_flag);
 
 #if DEBUG
