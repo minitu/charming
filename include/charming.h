@@ -5,7 +5,9 @@
 
 #define DUMMY_ITERS 100000
 // Maximum number of messages that are allowed to be in flight per pair of PEs
-#define MSG_IN_FLIGHT_MAX 128
+#define REMOTE_MSG_COUNT_MAX 1
+// Maximum number of messages that can be stored in the local message queue
+#define LOCAL_MSG_COUNT_MAX 128
 
 namespace charm {
 

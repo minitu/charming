@@ -23,10 +23,11 @@ __constant__ int c_n_pes;
 __device__ ringbuf_t* mbuf;
 __device__ size_t mbuf_size;
 __device__ uint64_t* send_status;
-__device__ uint64_t* recv_composite;
-__device__ uint64_t* send_composite;
+__device__ uint64_t* recv_remote_comp;
+__device__ compbuf_t* recv_local_comp;
+__device__ uint64_t* send_comp;
 __device__ size_t* send_status_idx;
-__device__ size_t* recv_composite_idx;
+__device__ size_t* recv_remote_comp_idx;
 __device__ composite_t* heap_buf;
 __device__ size_t heap_buf_size;
 
@@ -102,22 +103,30 @@ int main(int argc, char* argv[]) {
   h_mbuf->init(h_mbuf_size);
 
   // Allocate data structures
-  size_t h_status_size = MSG_IN_FLIGHT_MAX * h_n_pes * sizeof(uint64_t);
+  size_t h_status_size = REMOTE_MSG_COUNT_MAX * h_n_pes * sizeof(uint64_t);
   uint64_t* h_send_status = (uint64_t*)nvshmem_malloc(h_status_size);
-  size_t h_composite_size = MSG_IN_FLIGHT_MAX * h_n_pes * sizeof(uint64_t);
-  uint64_t* h_recv_composite = (uint64_t*)nvshmem_malloc(h_composite_size);
-  uint64_t* h_send_composite;
-  cudaMalloc(&h_send_composite, h_composite_size);
-  size_t h_idx_size = MSG_IN_FLIGHT_MAX * h_n_pes * sizeof(size_t);
+  size_t h_remote_comp_size = REMOTE_MSG_COUNT_MAX * h_n_pes * sizeof(uint64_t);
+  uint64_t* h_recv_remote_comp = (uint64_t*)nvshmem_malloc(h_remote_comp_size);
+  compbuf_t* h_recv_local_comp;
+  compbuf_t* h_recv_local_comp_d;
+  cudaMallocHost(&h_recv_local_comp, sizeof(compbuf_t));
+  cudaMalloc(&h_recv_local_comp_d, sizeof(compbuf_t));
+  assert(h_recv_local_comp && h_recv_local_comp_d);
+  h_recv_local_comp->init(LOCAL_MSG_COUNT_MAX);
+  size_t h_local_comp_size = LOCAL_MSG_COUNT_MAX * sizeof(uint64_t);
+  cudaMalloc(&h_recv_local_comp, h_local_comp_size);
+  uint64_t* h_send_comp;
+  cudaMalloc(&h_send_comp, h_remote_comp_size);
   size_t* h_send_status_idx;
-  size_t* h_recv_composite_idx;
+  size_t* h_recv_remote_comp_idx;
+  size_t h_idx_size = REMOTE_MSG_COUNT_MAX * h_n_pes * sizeof(size_t);
   cudaMalloc(&h_send_status_idx, h_idx_size);
-  cudaMalloc(&h_recv_composite_idx, h_idx_size);
+  cudaMalloc(&h_recv_remote_comp_idx, h_idx_size);
   composite_t* h_heap_buf;
-  size_t h_heap_buf_size = MSG_IN_FLIGHT_MAX * h_n_pes * 2 * sizeof(composite_t);
+  size_t h_heap_buf_size = REMOTE_MSG_COUNT_MAX * h_n_pes * 2 * sizeof(composite_t);
   cudaMalloc(&h_heap_buf, h_heap_buf_size);
-  assert(h_send_status && h_recv_composite && h_send_status_idx && h_recv_composite_idx
-      && h_heap_buf);
+  assert(h_send_status && h_recv_remote_comp && h_send_comp && h_send_status_idx
+      && h_recv_remote_comp_idx && h_heap_buf);
   cuda_check_error();
 
   // Synchronize all NVSHMEM PEs
@@ -151,17 +160,19 @@ int main(int argc, char* argv[]) {
   cudaMemcpyToSymbolAsync(mbuf, &h_mbuf_d, sizeof(ringbuf_t*), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(mbuf_size, &h_mbuf_size, sizeof(size_t), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(send_status, &h_send_status, sizeof(uint64_t*), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(recv_composite, &h_recv_composite, sizeof(uint64_t*), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(send_composite, &h_send_composite, sizeof(uint64_t*), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(recv_remote_comp, &h_recv_remote_comp, sizeof(uint64_t*), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyAsync(h_recv_local_comp, h_recv_local_comp_d, sizeof(compbuf_t), cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(recv_local_comp, &h_recv_local_comp_d, sizeof(compbuf_t*), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(send_comp, &h_send_comp, sizeof(uint64_t*), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(send_status_idx, &h_send_status_idx, sizeof(size_t*), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(recv_composite_idx, &h_recv_composite_idx, sizeof(size_t*), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(recv_remote_comp_idx, &h_recv_remote_comp_idx, sizeof(size_t*), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(heap_buf, &h_heap_buf, sizeof(composite_t*), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(heap_buf_size, &h_heap_buf_size, sizeof(size_t), 0, cudaMemcpyHostToDevice, stream);
   cudaMemsetAsync(h_send_status, 0, h_status_size, stream);
-  cudaMemsetAsync(h_recv_composite, 0, h_composite_size, stream);
-  cudaMemsetAsync(h_send_composite, 0, h_composite_size, stream);
+  cudaMemsetAsync(h_recv_remote_comp, 0, h_remote_comp_size, stream);
+  cudaMemsetAsync(h_send_comp, 0, h_remote_comp_size, stream);
   cudaMemsetAsync(h_send_status_idx, 0, h_idx_size, stream);
-  cudaMemsetAsync(h_recv_composite_idx, 0, h_idx_size, stream);
+  cudaMemsetAsync(h_recv_remote_comp_idx, 0, h_idx_size, stream);
   cudaMemsetAsync(h_heap_buf, 0, h_heap_buf_size, stream);
 
   cuda_check_error();
@@ -180,12 +191,17 @@ int main(int argc, char* argv[]) {
 
   // Cleanup
   nvshmem_free(h_send_status);
-  nvshmem_free(h_recv_composite);
-  cudaFree(h_send_composite);
+  nvshmem_free(h_recv_remote_comp);
+  cudaFree(h_send_comp);
   cudaFree(h_send_status_idx);
-  cudaFree(h_recv_composite_idx);
+  cudaFree(h_recv_remote_comp_idx);
   cudaFree(h_heap_buf);
   h_mbuf->fini();
+  cudaFreeHost(h_mbuf);
+  cudaFree(h_mbuf_d);
+  h_recv_local_comp->fini();
+  cudaFreeHost(h_recv_local_comp);
+  cudaFree(h_recv_local_comp_d);
   cudaStreamDestroy(stream);
   nvshmem_finalize();
   MPI_Finalize();

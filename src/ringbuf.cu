@@ -73,6 +73,50 @@ __device__ void ringbuf_t::release(size_t size) {
 }
 
 __device__ void ringbuf_t::print() {
-  printf("[ringbuf_t] ptr: %p, space: %llu, end: %llu, write: %llu, read: %llu\n",
+  printf("[ringbuf_t] ptr: %p, space: %llu, end: %llu, write: %lld, read: %lld\n",
       ptr, space, end, write, read);
+}
+
+__host__ void compbuf_t::init(size_t max_) {
+  max = max_;
+  count = 0;
+  write = 0;
+  read = 0;
+
+  // Allocate memory
+  cudaMalloc(&ptr, sizeof(uint64_t) * max);
+  assert(ptr);
+}
+
+__host__ void compbuf_t::fini() {
+  cudaFree(ptr);
+}
+
+__device__ compbuf_off_t compbuf_t::acquire() {
+  // Check if there is space
+  if (count >= max) return -1;
+
+  compbuf_off_t write_ret = write++;
+  if (write == max) {
+    // Wrap around
+    write = 0;
+  }
+  count++;
+
+  return write_ret;
+}
+
+__device__ void compbuf_t::release() {
+#ifdef DEBUG
+  assert(count > 0);
+#endif
+
+  if (++read == max) {
+    read = 0;
+  }
+}
+
+__device__ void compbuf_t::print() {
+  printf("[compbuf_t] ptr: %p, max: %llu, count: %llu, write: %lld, read: %lld\n",
+      ptr, max, count, write, read);
 }
