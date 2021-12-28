@@ -113,8 +113,6 @@ int main(int argc, char* argv[]) {
   cudaMalloc(&h_recv_local_comp_d, sizeof(compbuf_t));
   assert(h_recv_local_comp && h_recv_local_comp_d);
   h_recv_local_comp->init(LOCAL_MSG_COUNT_MAX);
-  size_t h_local_comp_size = LOCAL_MSG_COUNT_MAX * sizeof(uint64_t);
-  cudaMalloc(&h_recv_local_comp, h_local_comp_size);
   uint64_t* h_send_comp;
   cudaMalloc(&h_send_comp, h_remote_comp_size);
   size_t* h_send_status_idx;
@@ -161,7 +159,7 @@ int main(int argc, char* argv[]) {
   cudaMemcpyToSymbolAsync(mbuf_size, &h_mbuf_size, sizeof(size_t), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(send_status, &h_send_status, sizeof(uint64_t*), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(recv_remote_comp, &h_recv_remote_comp, sizeof(uint64_t*), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyAsync(h_recv_local_comp, h_recv_local_comp_d, sizeof(compbuf_t), cudaMemcpyHostToDevice, stream);
+  cudaMemcpyAsync(h_recv_local_comp_d, h_recv_local_comp, sizeof(compbuf_t), cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(recv_local_comp, &h_recv_local_comp_d, sizeof(compbuf_t*), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(send_comp, &h_send_comp, sizeof(uint64_t*), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(send_status_idx, &h_send_status_idx, sizeof(size_t*), 0, cudaMemcpyHostToDevice, stream);

@@ -114,6 +114,7 @@ __device__ void compbuf_t::release() {
   if (++read == max) {
     read = 0;
   }
+  count--;
 }
 
 __device__ void compbuf_t::print() {
