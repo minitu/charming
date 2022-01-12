@@ -132,10 +132,10 @@ int main(int argc, char* argv[]) {
 
   // Change device limits
   size_t stack_size, heap_size;
-  // TODO
-  //size_t new_heap_size = 8589934592; // Set max heap size to 8GB
-  //cudaDeviceSetLimit(cudaLimitStackSize, 16384);
+  constexpr size_t new_stack_size = 16384;
+  cudaDeviceSetLimit(cudaLimitStackSize, new_stack_size);
   cudaDeviceGetLimit(&stack_size, cudaLimitStackSize);
+  //constexpr size_t new_heap_size = 8589934592; // Set max heap size to 8GB
   //cudaDeviceSetLimit(cudaLimitMallocHeapSize, new_heap_size);
   cudaDeviceGetLimit(&heap_size, cudaLimitMallocHeapSize);
 

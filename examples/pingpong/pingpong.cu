@@ -18,8 +18,8 @@ __device__ void Comm::init(void* arg) {
   min_size = params[param_idx++];
   max_size = params[param_idx++];
   cur_size = min_size;
-  n_iters = params[param_idx++];
-  warmup = params[param_idx++];
+  n_iters = static_cast<int>(params[param_idx++]);
+  warmup = static_cast<int>(params[param_idx++]);
   iter = 0;
   data = new char[max_size];
 
