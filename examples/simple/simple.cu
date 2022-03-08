@@ -71,5 +71,5 @@ __device__ void charm::main(int argc, char** argv, size_t* argvs) {
   bar_proxy->invoke(9, 0);
 
   // Send termination messages to all PEs
-  charm::exit();
+  charm::end();
 }

@@ -1,10 +1,7 @@
-TARGET = charming
+include common.mk
 
+TARGET = charming
 BUILD_DIR = build
-NVSHMEM_HOME ?= $(HOME)/nvshmem/install
-NVCC_OPTS = -arch=sm_70 -I$(NVSHMEM_HOME)/include -I$(MPI_ROOT)/include -I./include #-DDEBUG
-NVCC_LINK = nvcc -ccbin=mpicxx $(NVCC_OPTS) -L$(NVSHMEM_HOME)/lib -lnvshmem -L$(MPI_ROOT)/lib -lmpi_ibm -lcuda -lcudart
-NVCC = nvcc --std=c++11 -dc $(NVCC_OPTS)
 
 HEADERS = include/$(TARGET).h \
           include/message.h \

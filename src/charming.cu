@@ -1,7 +1,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <cuda.h>
+#ifdef CHARMING_USE_MPI
 #include <mpi.h>
+#endif
 #include <nvshmem.h>
 #include <nvshmemx.h>
 
@@ -35,6 +37,7 @@ __device__ chare_proxy_base* chare_proxies[CHARE_TYPE_CNT_MAX];
 __device__ int chare_proxy_cnt;
 
 int main(int argc, char* argv[]) {
+#ifdef CHARMING_USE_MPI
   // Initialize MPI
   MPI_Init(&argc, &argv);
   int world_size;
@@ -47,6 +50,9 @@ int main(int argc, char* argv[]) {
   MPI_Comm comm = MPI_COMM_WORLD;
   attr.mpi_comm = &comm;
   nvshmemx_init_attr(NVSHMEMX_INIT_WITH_MPI_COMM, &attr);
+#else
+  nvshmem_init();
+#endif // CHARMING_USE_MPI
   int h_my_pe = nvshmem_my_pe();
   int h_n_pes = nvshmem_n_pes();
 
@@ -55,7 +61,7 @@ int main(int argc, char* argv[]) {
   int n_devices = 0;
   cudaGetDeviceCount(&n_devices);
   if (n_devices <= 0) {
-    if (rank == 0) {
+    if (h_my_pe == 0) {
       printf("ERROR: Need at least 1 GPU but detected %d GPUs\n", n_devices);
     }
     return -1;
@@ -146,7 +152,7 @@ int main(int argc, char* argv[]) {
   */
   int grid_size = 1;
   int block_size = 1;
-  if (rank == 0) {
+  if (h_my_pe == 0) {
     printf("CHARMING\nGrid size: %d\nBlock size: %d\nStack size: %llu B\n"
            "Heap size: %llu B\nClock rate: %.2lf GHz\n",
            grid_size, block_size, stack_size, heap_size,
@@ -201,8 +207,11 @@ int main(int argc, char* argv[]) {
   cudaFreeHost(h_recv_local_comp);
   cudaFree(h_recv_local_comp_d);
   cudaStreamDestroy(stream);
+
   nvshmem_finalize();
+#ifdef CHARMING_USE_MPI
   MPI_Finalize();
+#endif
 
   return 0;
 }

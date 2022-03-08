@@ -14,7 +14,7 @@ __device__ void Hello::greet(void* arg) {
   printf("Hello I'm %d of %d! Received %d\n", i, n, recv_int);
 
   if (i == n-1) {
-    charm::exit();
+    charm::end();
   } else {
     int send_int[1] = {recv_int + 1};
     hello_proxy->invoke(i + 1, 0, send_int, sizeof(int));
