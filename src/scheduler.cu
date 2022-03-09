@@ -36,12 +36,10 @@ __device__ envelope* charm::create_envelope(msgtype type, size_t msg_size, size_
   // Reserve space for this message in message buffer
   ringbuf_off_t mbuf_off = mbuf->acquire(msg_size);
   if (mbuf_off == -1) {
-    printf("PE %d error: Not enough space in message buffer\n", c_my_pe);
+    PERROR("PE %d: Not enough space in message buffer\n", c_my_pe);
     assert(false);
   }
-#ifdef DEBUG
-  printf("PE %d acquired message: offset %llu, size %llu\n", c_my_pe, mbuf_off, msg_size);
-#endif
+  PDEBUG("PE %d acquired message: offset %llu, size %llu\n", c_my_pe, mbuf_off, msg_size);
   *offset = mbuf_off;
 
   // Create envelope
@@ -57,10 +55,8 @@ __device__ void charm::send_msg(size_t offset, size_t msg_size, int dst_pe) {
     // Acquire space in local composite queue and store composite
     compbuf_off_t local_offset = recv_local_comp->acquire();
     *(composite_t*)recv_local_comp->addr(local_offset) = src_composite;
-#ifdef DEBUG
-    printf("PE %d sending local message: offset %llu, local %lld, size %llu\n",
+    PDEBUG("PE %d sending local message: offset %llu, local %lld, size %llu\n",
         c_my_pe, offset, local_offset, msg_size);
-#endif
   } else {
     // Sending message to a different PE
     // Obtain a message index for the target PE and set the corresponding used signal
@@ -76,11 +72,9 @@ __device__ void charm::send_msg(size_t offset, size_t msg_size, int dst_pe) {
     uint64_t* my_recv_remote_comp = recv_remote_comp + recv_offset;
     nvshmemx_signal_op(my_recv_remote_comp + msg_idx, src_composite.data,
         NVSHMEM_SIGNAL_SET, dst_pe);
-#ifdef DEBUG
     assert(msg_idx != SIZE_MAX);
-    printf("PE %d sending message request: offset %llu, size %llu, dst PE %d, idx %llu\n",
+    PDEBUG("PE %d sending message request: offset %llu, size %llu, dst PE %d, idx %llu\n",
         c_my_pe, offset, msg_size, dst_pe, msg_idx);
-#endif
 
 #ifndef NO_CLEANUP
     // Store source composite for later cleanup
@@ -136,10 +130,8 @@ __device__ __forceinline__ ssize_t process_msg(void* addr, bool& begin_term_flag
   static clock_value_t start;
   static clock_value_t end;
   envelope* env = (envelope*)addr;
-#ifdef DEBUG
-  printf("PE %d received msg type %d size %llu from PE %d\n",
+  PDEBUG("PE %d received msg type %d size %llu from PE %d\n",
          c_my_pe, env->type, env->size, env->src_pe);
-#endif
 
   if (env->type == msgtype::dummy) {
     // Dummy message
@@ -153,11 +145,9 @@ __device__ __forceinline__ ssize_t process_msg(void* addr, bool& begin_term_flag
   } else if (env->type == msgtype::create) {
     // Creation message
     create_msg* msg = (create_msg*)((char*)env + sizeof(envelope));
-#ifdef DEBUG
-    printf("PE %d creation msg chare ID %d, n_local %d, n_total %d, "
+    PDEBUG("PE %d creation msg chare ID %d, n_local %d, n_total %d, "
         "start idx %d, end idx %d\n", c_my_pe, msg->chare_id, msg->n_local,
         msg->n_total, msg->start_idx, msg->end_idx);
-#endif
     chare_proxy_base*& chare_proxy = chare_proxies[msg->chare_id];
     chare_proxy->alloc(msg->n_local, msg->n_total, msg->start_idx, msg->end_idx);
     char* tmp = (char*)msg + sizeof(create_msg);
@@ -169,10 +159,8 @@ __device__ __forceinline__ ssize_t process_msg(void* addr, bool& begin_term_flag
   } else if (env->type == msgtype::regular) {
     // Regular message
     regular_msg* msg = (regular_msg*)((char*)env + sizeof(envelope));
-#ifdef DEBUG
-    printf("PE %d regular msg chare ID %d chare idx %d EP ID %d\n", c_my_pe,
+    PDEBUG("PE %d regular msg chare ID %d chare idx %d EP ID %d\n", c_my_pe,
         msg->chare_id, msg->chare_idx, msg->ep_id);
-#endif
     chare_proxy_base*& chare_proxy = chare_proxies[msg->chare_id];
     void* payload = (char*)msg + sizeof(regular_msg);
     // TODO: Copy payload?
@@ -181,9 +169,7 @@ __device__ __forceinline__ ssize_t process_msg(void* addr, bool& begin_term_flag
     // Should only be received by PE 0
     assert(my_pe() == 0);
     // Begin termination message
-#ifdef DEBUG
-    printf("PE %d begin terminate msg\n", c_my_pe);
-#endif
+    PDEBUG("PE %d begin terminate msg\n", c_my_pe);
     if (!begin_term_flag) {
       for (int i = 0; i < n_pes(); i++) {
         send_do_term_msg(i);
@@ -192,9 +178,7 @@ __device__ __forceinline__ ssize_t process_msg(void* addr, bool& begin_term_flag
     }
   } else if (env->type == msgtype::do_terminate) {
     // Do termination message
-#ifdef DEBUG
-    printf("PE %d do terminate msg\n", c_my_pe);
-#endif
+    PDEBUG("PE %d do terminate msg\n", c_my_pe);
     do_term_flag = true;
   }
 
@@ -210,10 +194,8 @@ __device__ __forceinline__ void loop(min_heap& addr_heap, bool& begin_term_flag,
     size_t src_offset = src_composite.offset();
     size_t msg_size = src_composite.size();
     void* addr = mbuf->addr(src_offset);
-#ifdef DEBUG
-      printf("PE %d receiving local message: offset %llu, size %llu\n",
-          c_my_pe, src_offset, msg_size);
-#endif
+    PDEBUG("PE %d receiving local message: offset %llu, size %llu\n",
+        c_my_pe, src_offset, msg_size);
 
     // Process message
     process_msg(addr, begin_term_flag, do_term_flag);
@@ -224,10 +206,8 @@ __device__ __forceinline__ void loop(min_heap& addr_heap, bool& begin_term_flag,
 #ifndef NO_CLEANUP
     // Store composite to be cleared from memory
     addr_heap.push(src_composite);
-#ifdef DEBUG
-    printf("PE %d flagging local message for cleanup: offset %llu, "
+    PDEBUG("PE %d flagging local message for cleanup: offset %llu, "
         "size %llu\n", c_my_pe, src_offset, msg_size);
-#endif // DEBUG
 #endif // !NO_CLEANUP
   }
 
@@ -248,24 +228,20 @@ __device__ __forceinline__ void loop(min_heap& addr_heap, bool& begin_term_flag,
       // Reserve space for incoming message
       ringbuf_off_t dst_offset = mbuf->acquire(msg_size);
       if (dst_offset == -1) {
-        printf("PE %d error: Not enough space in message buffer\n", c_my_pe);
+        PERROR("PE %d: Not enough space in message buffer\n", c_my_pe);
         assert(false);
       }
-#ifdef DEBUG
-  printf("PE %d acquired message: offset %llu, size %llu\n",
-      c_my_pe, dst_offset, msg_size);
-#endif
+      PDEBUG("PE %d acquired message: offset %llu, size %llu\n",
+          c_my_pe, dst_offset, msg_size);
 
       // Perform a get operation to fetch the message
       // TODO: Make asynchronous
       void* dst_addr = mbuf->addr(dst_offset);
       nvshmem_char_get((char*)dst_addr, (char*)mbuf->addr(src_offset),
           msg_size, src_pe);
-#ifdef DEBUG
-      printf("PE %d receiving message: src offset %llu, dst offset %llu, "
+      PDEBUG("PE %d receiving message: src offset %llu, dst offset %llu, "
           "size %llu, src PE %d, idx %llu\n", c_my_pe, src_offset, dst_offset,
           msg_size, src_pe, msg_idx);
-#endif
 
       // Process message
       process_msg(dst_addr, begin_term_flag, do_term_flag);
@@ -278,11 +254,9 @@ __device__ __forceinline__ void loop(min_heap& addr_heap, bool& begin_term_flag,
       // Store composite to be cleared from memory
       composite_t dst_composite(dst_offset, msg_size);
       addr_heap.push(dst_composite);
-#ifdef DEBUG
-      printf("PE %d flagging received message for cleanup: offset %llu, "
+      PDEBUG("PE %d flagging received message for cleanup: offset %llu, "
           "size %llu, src PE %d, idx %llu\n", c_my_pe, dst_composite.offset(),
           dst_composite.size(), src_pe, msg_idx);
-#endif
 
       // Notify sender that message is ready for cleanup
       nvshmemx_signal_op(send_status + REMOTE_MSG_COUNT_MAX * c_my_pe + msg_idx,
@@ -312,12 +286,10 @@ __device__ __forceinline__ void loop(min_heap& addr_heap, bool& begin_term_flag,
       // Store composite to be cleared from memory
       composite_t src_composite(send_comp[msg_idx]);
       addr_heap.push(src_composite);
-#ifdef DEBUG
-      printf("PE %d flagging sent message for cleanup: offset %llu, size %llu, "
+      PDEBUG("PE %d flagging sent message for cleanup: offset %llu, size %llu, "
           "dst PE %llu, idx %llu\n", c_my_pe, src_composite.offset(),
           src_composite.size(), msg_idx / REMOTE_MSG_COUNT_MAX,
           msg_idx % REMOTE_MSG_COUNT_MAX);
-#endif
 
       // Reset signal to SIGNAL_FREE
       nvshmemx_signal_op(send_status + msg_idx, SIGNAL_FREE,
@@ -338,10 +310,8 @@ __device__ __forceinline__ void loop(min_heap& addr_heap, bool& begin_term_flag,
     if (clup_offset == mbuf->read && clup_size > 0) {
       mbuf->release(clup_size);
       addr_heap.pop();
-#ifdef DEBUG
-      printf("PE %d releasing message: offset %llu, size %llu\n",
+      PDEBUG("PE %d releasing message: offset %llu, size %llu\n",
           c_my_pe, clup_offset, clup_size);
-#endif
     } else break;
   }
 #endif // !NO_CLEANUP
@@ -372,8 +342,6 @@ __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
       loop(addr_heap, begin_term_flag, do_term_flag);
     } while (!do_term_flag);
 
-#if DEBUG
-    printf("PE %d terminating...\n", c_my_pe);
-#endif
+    PDEBUG("PE %d terminating...\n", c_my_pe);
   }
 }

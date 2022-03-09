@@ -21,6 +21,9 @@ using namespace charm;
 
 __constant__ int c_my_pe;
 __constant__ int c_n_pes;
+__constant__ int c_my_pe_node;
+__constant__ int c_n_pes_node;
+__constant__ int c_n_nodes;
 
 __device__ ringbuf_t* mbuf;
 __device__ size_t mbuf_size;
@@ -55,18 +58,21 @@ int main(int argc, char* argv[]) {
 #endif // CHARMING_USE_MPI
   int h_my_pe = nvshmem_my_pe();
   int h_n_pes = nvshmem_n_pes();
+  int h_my_pe_node = nvshmem_team_my_pe(NVSHMEMX_TEAM_NODE);
+  int h_n_pes_node = nvshmem_team_n_pes(NVSHMEMX_TEAM_NODE);
+  int h_n_nodes = h_n_pes / h_n_pes_node;
 
   // Initialize CUDA
-  // FIXME: Always mapped to first device
+  // Round-robin mapping of processes to GPUs
   int n_devices = 0;
   cudaGetDeviceCount(&n_devices);
   if (n_devices <= 0) {
     if (h_my_pe == 0) {
-      printf("ERROR: Need at least 1 GPU but detected %d GPUs\n", n_devices);
+      PERROR("Need at least 1 GPU but detected %d GPUs\n", n_devices);
     }
     return -1;
   }
-  cudaSetDevice(0);
+  cudaSetDevice(h_my_pe_node % n_devices);
   cudaStream_t stream;
   cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
   cuda_check_error();
@@ -147,22 +153,30 @@ int main(int argc, char* argv[]) {
 
   // Print configuration and launch scheduler
   /* TODO
-  int grid_size = prop.multiProcessorCount;
-  int block_size = prop.maxThreadsPerBlock;
+  dim3 grid_dim = dim3(prop.multiProcessorCount);
+  dim3 block_dim = dim3(prop.maxThreadsPerBlock);
   */
-  int grid_size = 1;
-  int block_size = 1;
+  dim3 grid_dim = dim3(1);
+  dim3 block_dim = dim3(1);
   if (h_my_pe == 0) {
-    printf("CHARMING\nGrid size: %d\nBlock size: %d\nStack size: %llu B\n"
-           "Heap size: %llu B\nClock rate: %.2lf GHz\n",
-           grid_size, block_size, stack_size, heap_size,
-           (double)prop.clockRate / 1e6);
+    PINFO("Initiating CharminG\n");
+    PINFO("PEs: %d, Nodes: %d\n", h_n_pes, h_n_nodes);
+    PINFO("Thread grid: %d x %d x %d, Thread block: %d x %d x %d\n",
+        grid_dim.x, grid_dim.y, grid_dim.z, block_dim.x, block_dim.y, block_dim.z);
+    PINFO("Stack size: %llu Bytes, Heap size: %llu Bytes, Clock rate: %.2lf GHz\n",
+        stack_size, heap_size, (double)prop.clockRate / 1e6);
   }
+
   cudaMemcpyToSymbolAsync(c_my_pe, &h_my_pe, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(c_n_pes, &h_n_pes, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(c_my_pe_node, &h_my_pe_node, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(c_n_pes_node, &h_n_pes_node, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(c_n_nodes, &h_n_nodes, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
+
   cudaMemcpyAsync(h_mbuf_d, h_mbuf, sizeof(ringbuf_t), cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(mbuf, &h_mbuf_d, sizeof(ringbuf_t*), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(mbuf_size, &h_mbuf_size, sizeof(size_t), 0, cudaMemcpyHostToDevice, stream);
+
   cudaMemcpyToSymbolAsync(send_status, &h_send_status, sizeof(uint64_t*), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(recv_remote_comp, &h_recv_remote_comp, sizeof(uint64_t*), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyAsync(h_recv_local_comp_d, h_recv_local_comp, sizeof(compbuf_t), cudaMemcpyHostToDevice, stream);
@@ -170,23 +184,27 @@ int main(int argc, char* argv[]) {
   cudaMemcpyToSymbolAsync(send_comp, &h_send_comp, sizeof(uint64_t*), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(send_status_idx, &h_send_status_idx, sizeof(size_t*), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(recv_remote_comp_idx, &h_recv_remote_comp_idx, sizeof(size_t*), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(heap_buf, &h_heap_buf, sizeof(composite_t*), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(heap_buf_size, &h_heap_buf_size, sizeof(size_t), 0, cudaMemcpyHostToDevice, stream);
+
   cudaMemsetAsync(h_send_status, 0, h_status_size, stream);
   cudaMemsetAsync(h_recv_remote_comp, 0, h_remote_comp_size, stream);
   cudaMemsetAsync(h_send_comp, 0, h_remote_comp_size, stream);
   cudaMemsetAsync(h_send_status_idx, 0, h_idx_size, stream);
   cudaMemsetAsync(h_recv_remote_comp_idx, 0, h_idx_size, stream);
+
+  cudaMemcpyToSymbolAsync(heap_buf, &h_heap_buf, sizeof(composite_t*), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(heap_buf_size, &h_heap_buf_size, sizeof(size_t), 0, cudaMemcpyHostToDevice, stream);
   cudaMemsetAsync(h_heap_buf, 0, h_heap_buf_size, stream);
 
   cuda_check_error();
+  nvshmem_barrier_all();
+
   /* This doesn't support CUDA dynamic parallelism, will it be a problem?
   void* scheduler_args[4] = { &rbuf, &rbuf_size, &mbuf, &mbuf_size };
-  nvshmemx_collective_launch((const void*)scheduler, grid_size, block_size,
+  nvshmemx_collective_launch((const void*)scheduler, grid_dim, block_dim,
       //scheduler_args, 0, stream);
       nullptr, 0, stream);
   */
-  scheduler<<<grid_size, block_size, 0, stream>>>(argc, d_argv, d_argvs);
+  scheduler<<<grid_dim, block_dim, 0, stream>>>(argc, d_argv, d_argvs);
   cudaStreamSynchronize(stream);
   cuda_check_error();
 
@@ -221,13 +239,11 @@ __device__ void charm::end() {
   send_begin_term_msg(0);
 }
 
-__device__ int charm::n_pes() {
-  return c_n_pes;
-}
-
-__device__ int charm::my_pe() {
-  return c_my_pe;
-}
+__device__ int charm::my_pe() { return c_my_pe; }
+__device__ int charm::n_pes() { return c_n_pes; }
+__device__ int charm::my_pe_node() { return c_my_pe_node; }
+__device__ int charm::n_pes_node() { return c_n_pes_node; }
+__device__ int charm::n_nodes() { return c_n_nodes; }
 
 __device__ int charm::device_atoi(const char* str, int strlen) {
   int tmp = 0;
