@@ -1,4 +1,5 @@
 include ../../common.mk
+include ../examples.mk
 
 TARGET = pingpong
 
@@ -6,10 +7,10 @@ TARGET = pingpong
 all: $(TARGET)
 
 $(TARGET): $(TARGET).o
-	$(NVCC_LINK) -o $@ $^
+	$(NVCC) $(NVCC_LINK_OPTS) -o $@ $^
 
 %.o: %.cu %.h
-	$(NVCC) -o $@ -c $<
+	$(NVCC) $(NVCC_CU_OPTS) -o $@ -c $<
 
 .PHONY: clean
 clean:
