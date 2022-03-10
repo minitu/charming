@@ -62,7 +62,7 @@ int main(int argc, char* argv[]) {
   int h_n_pes_node = nvshmem_team_n_pes(NVSHMEMX_TEAM_NODE);
   int h_n_nodes = h_n_pes / h_n_pes_node;
 
-  // Initialize CUDA
+  // Initialize CUDA and create stream
   // Round-robin mapping of processes to GPUs
   int n_devices = 0;
   cudaGetDeviceCount(&n_devices);

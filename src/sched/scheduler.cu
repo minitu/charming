@@ -83,14 +83,6 @@ __device__ void charm::send_msg(size_t offset, size_t msg_size, int dst_pe) {
   }
 }
 
-__device__ void charm::send_dummy_msg(int dst_pe) {
-  size_t msg_size = envelope::alloc_size(0);
-  size_t offset;
-  envelope* env = create_envelope(msgtype::dummy, msg_size, &offset);
-
-  send_msg(offset, msg_size, dst_pe);
-}
-
 __device__ void charm::send_reg_msg(int chare_id, int chare_idx, int ep_id,
                                     void* buf, size_t payload_size, int dst_pe) {
   size_t msg_size = envelope::alloc_size(sizeof(regular_msg) + payload_size);
@@ -126,45 +118,39 @@ __device__ void charm::send_do_term_msg(int dst_pe) {
 
 __device__ __forceinline__ ssize_t process_msg(void* addr, bool& begin_term_flag,
                                                bool& do_term_flag) {
-  static int dummy_cnt = 0;
-  static clock_value_t start;
-  static clock_value_t end;
   envelope* env = (envelope*)addr;
   PDEBUG("PE %d: received msg type %d size %llu from PE %d\n",
          c_my_pe, env->type, env->size, env->src_pe);
 
-  if (env->type == msgtype::dummy) {
-    // Dummy message
-    if (dummy_cnt == 0) {
-      start = clock64();
-    } else if (dummy_cnt == DUMMY_ITERS-1) {
-      end = clock64();
-      printf("Receive avg clocks: %lld\n", (end - start) / DUMMY_ITERS);
-    }
-    dummy_cnt++;
-  } else if (env->type == msgtype::create) {
+  if (env->type == msgtype::create) {
     // Creation message
     create_msg* msg = (create_msg*)((char*)env + sizeof(envelope));
     PDEBUG("PE %d: creation msg chare ID %d, n_local %d, n_total %d, "
         "start idx %d, end idx %d\n", c_my_pe, msg->chare_id, msg->n_local,
         msg->n_total, msg->start_idx, msg->end_idx);
+
     chare_proxy_base*& chare_proxy = chare_proxies[msg->chare_id];
     char* map_ptr = (char*)msg + sizeof(create_msg);
     char* obj_ptr = map_ptr + sizeof(int) * msg->n_total;
+
     chare_proxy->create_local(msg->n_local, msg->n_total, msg->start_idx,
         msg->end_idx, map_ptr, obj_ptr);
+
   } else if (env->type == msgtype::regular) {
     // Regular message
     regular_msg* msg = (regular_msg*)((char*)env + sizeof(envelope));
     PDEBUG("PE %d: regular msg chare ID %d chare idx %d EP ID %d\n", c_my_pe,
         msg->chare_id, msg->chare_idx, msg->ep_id);
+
     chare_proxy_base*& chare_proxy = chare_proxies[msg->chare_id];
     void* payload = (char*)msg + sizeof(regular_msg);
-    // TODO: Copy payload?
+
     chare_proxy->call(msg->chare_idx, msg->ep_id, payload);
+
   } else if (env->type == msgtype::begin_terminate) {
     // Should only be received by PE 0
     assert(my_pe() == 0);
+
     // Begin termination message
     PDEBUG("PE %d: begin terminate msg\n", c_my_pe);
     if (!begin_term_flag) {
@@ -173,10 +159,12 @@ __device__ __forceinline__ ssize_t process_msg(void* addr, bool& begin_term_flag
       }
       begin_term_flag = true;
     }
+
   } else if (env->type == msgtype::do_terminate) {
     // Do termination message
     PDEBUG("PE %d: do terminate msg\n", c_my_pe);
     do_term_flag = true;
+
   } else {
     PERROR("PE %d: unrecognized message type %d\n", c_my_pe, env->type);
     assert(false);

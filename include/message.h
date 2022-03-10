@@ -6,7 +6,6 @@
 namespace charm {
 
 enum class msgtype {
-  dummy,
   regular,
   create,
   begin_terminate,
