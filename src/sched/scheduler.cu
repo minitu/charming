@@ -130,7 +130,7 @@ __device__ __forceinline__ ssize_t process_msg(void* addr, bool& begin_term_flag
   static clock_value_t start;
   static clock_value_t end;
   envelope* env = (envelope*)addr;
-  PDEBUG("PE %d received msg type %d size %llu from PE %d\n",
+  PDEBUG("PE %d: received msg type %d size %llu from PE %d\n",
          c_my_pe, env->type, env->size, env->src_pe);
 
   if (env->type == msgtype::dummy) {
@@ -145,21 +145,18 @@ __device__ __forceinline__ ssize_t process_msg(void* addr, bool& begin_term_flag
   } else if (env->type == msgtype::create) {
     // Creation message
     create_msg* msg = (create_msg*)((char*)env + sizeof(envelope));
-    PDEBUG("PE %d creation msg chare ID %d, n_local %d, n_total %d, "
+    PDEBUG("PE %d: creation msg chare ID %d, n_local %d, n_total %d, "
         "start idx %d, end idx %d\n", c_my_pe, msg->chare_id, msg->n_local,
         msg->n_total, msg->start_idx, msg->end_idx);
     chare_proxy_base*& chare_proxy = chare_proxies[msg->chare_id];
-    chare_proxy->alloc(msg->n_local, msg->n_total, msg->start_idx, msg->end_idx);
-    char* tmp = (char*)msg + sizeof(create_msg);
-    chare_proxy->store_loc_map(tmp);
-    tmp += sizeof(int) * msg->n_total;
-    for (int i = 0; i < msg->n_local; i++) {
-      chare_proxy->unpack(tmp, i);
-    }
+    char* map_ptr = (char*)msg + sizeof(create_msg);
+    char* obj_ptr = map_ptr + sizeof(int) * msg->n_total;
+    chare_proxy->create_local(msg->n_local, msg->n_total, msg->start_idx,
+        msg->end_idx, map_ptr, obj_ptr);
   } else if (env->type == msgtype::regular) {
     // Regular message
     regular_msg* msg = (regular_msg*)((char*)env + sizeof(envelope));
-    PDEBUG("PE %d regular msg chare ID %d chare idx %d EP ID %d\n", c_my_pe,
+    PDEBUG("PE %d: regular msg chare ID %d chare idx %d EP ID %d\n", c_my_pe,
         msg->chare_id, msg->chare_idx, msg->ep_id);
     chare_proxy_base*& chare_proxy = chare_proxies[msg->chare_id];
     void* payload = (char*)msg + sizeof(regular_msg);
@@ -169,7 +166,7 @@ __device__ __forceinline__ ssize_t process_msg(void* addr, bool& begin_term_flag
     // Should only be received by PE 0
     assert(my_pe() == 0);
     // Begin termination message
-    PDEBUG("PE %d begin terminate msg\n", c_my_pe);
+    PDEBUG("PE %d: begin terminate msg\n", c_my_pe);
     if (!begin_term_flag) {
       for (int i = 0; i < n_pes(); i++) {
         send_do_term_msg(i);
@@ -178,8 +175,11 @@ __device__ __forceinline__ ssize_t process_msg(void* addr, bool& begin_term_flag
     }
   } else if (env->type == msgtype::do_terminate) {
     // Do termination message
-    PDEBUG("PE %d do terminate msg\n", c_my_pe);
+    PDEBUG("PE %d: do terminate msg\n", c_my_pe);
     do_term_flag = true;
+  } else {
+    PERROR("PE %d: unrecognized message type %d\n", c_my_pe, env->type);
+    assert(false);
   }
 
   return env->size;

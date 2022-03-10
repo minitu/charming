@@ -139,9 +139,6 @@ int main(int argc, char* argv[]) {
       && h_recv_remote_comp_idx && h_heap_buf);
   cuda_check_error();
 
-  // Synchronize all NVSHMEM PEs
-  nvshmem_barrier_all();
-
   // Change device limits
   size_t stack_size, heap_size;
   constexpr size_t new_stack_size = 16384;
@@ -196,20 +193,27 @@ int main(int argc, char* argv[]) {
   cudaMemsetAsync(h_heap_buf, 0, h_heap_buf_size, stream);
 
   cuda_check_error();
-  nvshmem_barrier_all();
+  nvshmemx_barrier_all_on_stream(stream);
 
-  /* This doesn't support CUDA dynamic parallelism, will it be a problem?
-  void* scheduler_args[4] = { &rbuf, &rbuf_size, &mbuf, &mbuf_size };
-  nvshmemx_collective_launch((const void*)scheduler, grid_dim, block_dim,
-      //scheduler_args, 0, stream);
-      nullptr, 0, stream);
+  void* kargs[] = { &argc, &d_argv, &d_argvs };
+  /*
+  // Query largest grid size for concurrent NVSHMEM collectives
+  int grid_size;
+  int nvshmem_ret = nvshmemx_collective_launch_query_gridsize((const void*)scheduler, block_dim, kargs, 0, &grid_size);
+  if (nvshmem_ret) {
+    if (h_my_pe == 0) {
+      PERROR("nvshmemx_collective_launch_query_gridsize aborted with %d\n", nvshmem_ret);
+    }
+    return -1;
+  }
   */
-  scheduler<<<grid_dim, block_dim, 0, stream>>>(argc, d_argv, d_argvs);
+
+  //scheduler<<<grid_dim, block_dim, 0, stream>>>(argc, d_argv, d_argvs);
+  nvshmemx_collective_launch((const void*)scheduler, grid_dim, block_dim, kargs, 0, stream);
   cudaStreamSynchronize(stream);
   cuda_check_error();
 
-  //nvshmemx_barrier_all_on_stream(stream); // Hangs
-  nvshmem_barrier_all();
+  nvshmemx_barrier_all_on_stream(stream);
 
   // Cleanup
   nvshmem_free(h_send_status);
