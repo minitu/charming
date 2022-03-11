@@ -10,8 +10,12 @@ struct min_heap {
   size_t size;
   size_t max_size;
 
-  __device__ min_heap(composite_t* buf_, size_t max_size_)
-    : buf(buf_), size(0), max_size(max_size_) {}
+  __device__ min_heap() : buf(nullptr), size(0), max_size(0) {}
+  __device__ void init(composite_t* buf_, size_t max_size_) {
+    buf = buf_;
+    size = 0;
+    max_size = max_size_;
+  }
 
   __device__ __forceinline__ int left(int idx) { return (idx * 2 + 1); }
   __device__ __forceinline__ int right(int idx) { return (idx * 2 + 2); }

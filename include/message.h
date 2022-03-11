@@ -51,6 +51,12 @@ struct alignas(ALIGN_SIZE) create_msg {
     : chare_id(chare_id_), n_local(n_local_), n_total(n_total_), start_idx(start_idx_), end_idx(end_idx_) {}
 };
 
+__device__ envelope* create_envelope(msgtype type, size_t msg_size, size_t* offset);
+__device__ void send_msg(size_t offset, size_t msg_size, int dst_pe);
+__device__ void send_reg_msg(int chare_id, int chare_idx, int ep_id, void* buf, size_t payload_size, int dst_pe);
+__device__ void send_begin_term_msg(int dst_pe);
+__device__ void send_do_term_msg(int dst_pe);
+
 }
 
 #endif // _MESSAGE_H_

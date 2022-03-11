@@ -10,11 +10,12 @@ SRCS := $(TARGET).cu \
         sched/scheduler.cu \
         comm/get/ringbuf.cu \
         comm/get/heap.cu \
+        comm/get/get.cu \
         util/util.cu
 
 OBJS := $(patsubst %.cu, $(OBJ_DIR)/%.o, $(filter %.cu, $(SRCS)))
 
-INC := -Iinclude -Isrc/comm/get -Isrc/sched -Isrc/util
+INC := -Iinclude -Isrc/comm -Isrc/comm/get -Isrc/sched -Isrc/util
 
 NVCC_CU_OPTS = --std=c++11 -dc $(ARCH) -I$(NVSHMEM_PREFIX)/include
 ifeq ($(CHARMING_USE_MPI), 1)

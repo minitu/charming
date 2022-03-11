@@ -9,9 +9,8 @@
 
 #include "charming.h"
 #include "message.h"
+#include "comm.h"
 #include "scheduler.h"
-#include "composite.h"
-#include "ringbuf.h"
 #include "util.h"
 
 // Maximum number of chare types
@@ -19,22 +18,13 @@
 
 using namespace charm;
 
+cudaStream_t stream;
+
 __constant__ int c_my_pe;
 __constant__ int c_n_pes;
 __constant__ int c_my_pe_node;
 __constant__ int c_n_pes_node;
 __constant__ int c_n_nodes;
-
-__device__ ringbuf_t* mbuf;
-__device__ size_t mbuf_size;
-__device__ uint64_t* send_status;
-__device__ uint64_t* recv_remote_comp;
-__device__ compbuf_t* recv_local_comp;
-__device__ uint64_t* send_comp;
-__device__ size_t* send_status_idx;
-__device__ size_t* recv_remote_comp_idx;
-__device__ composite_t* heap_buf;
-__device__ size_t heap_buf_size;
 
 __device__ chare_proxy_base* chare_proxies[CHARE_TYPE_CNT_MAX];
 __device__ int chare_proxy_cnt;
@@ -73,7 +63,6 @@ int main(int argc, char* argv[]) {
     return -1;
   }
   cudaSetDevice(h_my_pe_node % n_devices);
-  cudaStream_t stream;
   cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
   cuda_check_error();
 
@@ -101,44 +90,6 @@ int main(int argc, char* argv[]) {
   cudaMemcpyAsync(d_argv, h_argv, sizeof(char*) * argc, cudaMemcpyHostToDevice, stream);
   cuda_check_error();
 
-  // Allocate message buffer
-  cudaDeviceProp prop;
-  cudaGetDeviceProperties(&prop, 0);
-  //size_t h_mbuf_size = prop.totalGlobalMem / 2;
-  // TODO
-  size_t h_mbuf_size = 1073741824;
-  ringbuf_t* h_mbuf;
-  ringbuf_t* h_mbuf_d;
-  cudaMallocHost(&h_mbuf, sizeof(ringbuf_t));
-  cudaMalloc(&h_mbuf_d, sizeof(ringbuf_t));
-  assert(h_mbuf && h_mbuf_d);
-  h_mbuf->init(h_mbuf_size);
-
-  // Allocate data structures
-  size_t h_status_size = REMOTE_MSG_COUNT_MAX * h_n_pes * sizeof(uint64_t);
-  uint64_t* h_send_status = (uint64_t*)nvshmem_malloc(h_status_size);
-  size_t h_remote_comp_size = REMOTE_MSG_COUNT_MAX * h_n_pes * sizeof(uint64_t);
-  uint64_t* h_recv_remote_comp = (uint64_t*)nvshmem_malloc(h_remote_comp_size);
-  compbuf_t* h_recv_local_comp;
-  compbuf_t* h_recv_local_comp_d;
-  cudaMallocHost(&h_recv_local_comp, sizeof(compbuf_t));
-  cudaMalloc(&h_recv_local_comp_d, sizeof(compbuf_t));
-  assert(h_recv_local_comp && h_recv_local_comp_d);
-  h_recv_local_comp->init(LOCAL_MSG_COUNT_MAX);
-  uint64_t* h_send_comp;
-  cudaMalloc(&h_send_comp, h_remote_comp_size);
-  size_t* h_send_status_idx;
-  size_t* h_recv_remote_comp_idx;
-  size_t h_idx_size = REMOTE_MSG_COUNT_MAX * h_n_pes * sizeof(size_t);
-  cudaMalloc(&h_send_status_idx, h_idx_size);
-  cudaMalloc(&h_recv_remote_comp_idx, h_idx_size);
-  composite_t* h_heap_buf;
-  size_t h_heap_buf_size = REMOTE_MSG_COUNT_MAX * h_n_pes * 2 * sizeof(composite_t);
-  cudaMalloc(&h_heap_buf, h_heap_buf_size);
-  assert(h_send_status && h_recv_remote_comp && h_send_comp && h_send_status_idx
-      && h_recv_remote_comp_idx && h_heap_buf);
-  cuda_check_error();
-
   // Change device limits
   size_t stack_size, heap_size;
   constexpr size_t new_stack_size = 16384;
@@ -149,6 +100,8 @@ int main(int argc, char* argv[]) {
   cudaDeviceGetLimit(&heap_size, cudaLimitMallocHeapSize);
 
   // Print configuration and launch scheduler
+  cudaDeviceProp prop;
+  cudaGetDeviceProperties(&prop, 0);
   /* TODO
   dim3 grid_dim = dim3(prop.multiProcessorCount);
   dim3 block_dim = dim3(prop.maxThreadsPerBlock);
@@ -169,30 +122,11 @@ int main(int argc, char* argv[]) {
   cudaMemcpyToSymbolAsync(c_my_pe_node, &h_my_pe_node, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(c_n_pes_node, &h_n_pes_node, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(c_n_nodes, &h_n_nodes, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
-
-  cudaMemcpyAsync(h_mbuf_d, h_mbuf, sizeof(ringbuf_t), cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(mbuf, &h_mbuf_d, sizeof(ringbuf_t*), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(mbuf_size, &h_mbuf_size, sizeof(size_t), 0, cudaMemcpyHostToDevice, stream);
-
-  cudaMemcpyToSymbolAsync(send_status, &h_send_status, sizeof(uint64_t*), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(recv_remote_comp, &h_recv_remote_comp, sizeof(uint64_t*), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyAsync(h_recv_local_comp_d, h_recv_local_comp, sizeof(compbuf_t), cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(recv_local_comp, &h_recv_local_comp_d, sizeof(compbuf_t*), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(send_comp, &h_send_comp, sizeof(uint64_t*), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(send_status_idx, &h_send_status_idx, sizeof(size_t*), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(recv_remote_comp_idx, &h_recv_remote_comp_idx, sizeof(size_t*), 0, cudaMemcpyHostToDevice, stream);
-
-  cudaMemsetAsync(h_send_status, 0, h_status_size, stream);
-  cudaMemsetAsync(h_recv_remote_comp, 0, h_remote_comp_size, stream);
-  cudaMemsetAsync(h_send_comp, 0, h_remote_comp_size, stream);
-  cudaMemsetAsync(h_send_status_idx, 0, h_idx_size, stream);
-  cudaMemsetAsync(h_recv_remote_comp_idx, 0, h_idx_size, stream);
-
-  cudaMemcpyToSymbolAsync(heap_buf, &h_heap_buf, sizeof(composite_t*), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(heap_buf_size, &h_heap_buf_size, sizeof(size_t), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemsetAsync(h_heap_buf, 0, h_heap_buf_size, stream);
-
   cuda_check_error();
+
+  // Initialize communication module
+  comm_init_host(h_n_pes);
+
   nvshmemx_barrier_all_on_stream(stream);
 
   void* kargs[] = { &argc, &d_argv, &d_argvs };
@@ -208,6 +142,7 @@ int main(int argc, char* argv[]) {
   }
   */
 
+  // Launch scheduler kernel
   //scheduler<<<grid_dim, block_dim, 0, stream>>>(argc, d_argv, d_argvs);
   nvshmemx_collective_launch((const void*)scheduler, grid_dim, block_dim, kargs, 0, stream);
   cudaStreamSynchronize(stream);
@@ -216,20 +151,8 @@ int main(int argc, char* argv[]) {
   nvshmemx_barrier_all_on_stream(stream);
 
   // Cleanup
-  nvshmem_free(h_send_status);
-  nvshmem_free(h_recv_remote_comp);
-  cudaFree(h_send_comp);
-  cudaFree(h_send_status_idx);
-  cudaFree(h_recv_remote_comp_idx);
-  cudaFree(h_heap_buf);
-  h_mbuf->fini();
-  cudaFreeHost(h_mbuf);
-  cudaFree(h_mbuf_d);
-  h_recv_local_comp->fini();
-  cudaFreeHost(h_recv_local_comp);
-  cudaFree(h_recv_local_comp_d);
+  comm_fini_host();
   cudaStreamDestroy(stream);
-
   nvshmem_finalize();
 #ifdef CHARMING_USE_MPI
   MPI_Finalize();

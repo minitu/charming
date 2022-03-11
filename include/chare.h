@@ -3,7 +3,7 @@
 
 #include <nvshmem.h>
 #include <nvfunctional>
-#include "scheduler.h"
+#include "message.h"
 
 namespace charm {
 
