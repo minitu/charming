@@ -6,8 +6,6 @@
 #include "comm.h"
 #include "scheduler.h"
 #include "chare.h"
-#include "ringbuf.h"
-#include "heap.h"
 #include "util.h"
 
 using namespace charm;
