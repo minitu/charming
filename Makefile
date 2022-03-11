@@ -6,18 +6,30 @@ OBJ_DIR := $(BUILD_DIR)/obj
 INC_DIR := $(BUILD_DIR)/include
 LIB_DIR := $(BUILD_DIR)/lib
 
-SRCS := $(TARGET).cu \
-        sched/scheduler.cu \
-        comm/get/ringbuf.cu \
+SRCS = $(TARGET).cu \
+       sched/scheduler.cu \
+       util/util.cu
+
+ifeq ($(CHARMING_COMM_TYPE), 0)
+SRCS += comm/get/ringbuf.cu \
         comm/get/heap.cu \
-        comm/get/get.cu \
-        util/util.cu
+        comm/get/get.cu
+else
+SRCS += comm/put/ringbuf.cu \
+        comm/put/msg_queue.cu \
+        comm/put/put.cu
+endif
 
 OBJS := $(patsubst %.cu, $(OBJ_DIR)/%.o, $(filter %.cu, $(SRCS)))
 
-INC := -Iinclude -Isrc/comm -Isrc/comm/get -Isrc/sched -Isrc/util
+INC = -Iinclude -Isrc/comm -Isrc/sched -Isrc/util
+ifeq ($(CHARMING_COMM_TYPE), 0)
+INC += -Isrc/comm/get
+else
+INC += -Isrc/comm/put
+endif
 
-NVCC_CU_OPTS = --std=c++11 -dc $(ARCH) -I$(NVSHMEM_PREFIX)/include
+NVCC_CU_OPTS = --std=c++11 -dc $(ARCH) -DCHARMING_COMM_TYPE=$(CHARMING_COMM_TYPE) -I$(NVSHMEM_PREFIX)/include
 ifeq ($(CHARMING_USE_MPI), 1)
 NVCC_CU_OPTS += -I$(MPI_ROOT)/include -DCHARMING_USE_MPI
 endif

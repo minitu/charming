@@ -151,7 +151,7 @@ int main(int argc, char* argv[]) {
   nvshmemx_barrier_all_on_stream(stream);
 
   // Cleanup
-  comm_fini_host();
+  comm_fini_host(h_n_pes);
   cudaStreamDestroy(stream);
   nvshmem_finalize();
 #ifdef CHARMING_USE_MPI

@@ -165,7 +165,7 @@ struct chare_proxy : chare_proxy_base {
         obj.pack(tmp);
 
         // Send creation message to target PE
-        send_msg(offset, msg_size, pe);
+        send_msg(env, offset, msg_size, pe);
       }
 
       // Update start chare index

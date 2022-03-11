@@ -15,12 +15,14 @@ using namespace charm;
 
 extern cudaStream_t stream;
 
+// GPU constant memory
 extern __constant__ int c_my_pe;
 extern __constant__ int c_n_pes;
 extern __constant__ int c_my_pe_node;
 extern __constant__ int c_n_pes_node;
 extern __constant__ int c_n_nodes;
 
+// GPU global memory
 __device__ ringbuf_t* mbuf;
 __device__ size_t mbuf_size;
 __device__ uint64_t* send_status;
@@ -32,6 +34,7 @@ __device__ size_t* recv_remote_comp_idx;
 __device__ composite_t* heap_buf;
 __device__ size_t heap_buf_size;
 
+// Host memory
 uint64_t* h_send_status;
 uint64_t* h_recv_remote_comp;
 uint64_t* h_send_comp;
@@ -101,7 +104,7 @@ void charm::comm_init_host(int n_pes) {
   cuda_check_error();
 }
 
-void charm::comm_fini_host() {
+void charm::comm_fini_host(int n_pes) {
   nvshmem_free(h_send_status);
   nvshmem_free(h_recv_remote_comp);
 
@@ -274,7 +277,7 @@ __device__ envelope* charm::create_envelope(msgtype type, size_t msg_size, size_
   return new (mbuf->addr(mbuf_off)) envelope(type, msg_size, c_my_pe);
 }
 
-__device__ void charm::send_msg(size_t offset, size_t msg_size, int dst_pe) {
+__device__ void charm::send_msg(envelope* env, size_t offset, size_t msg_size, int dst_pe) {
   // Create composite using offset and size of source buffer
   composite_t src_composite(offset, msg_size);
 
@@ -325,7 +328,7 @@ __device__ void charm::send_reg_msg(int chare_id, int chare_idx, int ep_id,
     memcpy((char*)msg + sizeof(regular_msg), buf, payload_size);
   }
 
-  send_msg(offset, msg_size, dst_pe);
+  send_msg(env, offset, msg_size, dst_pe);
 }
 
 __device__ void charm::send_begin_term_msg(int dst_pe) {
@@ -333,7 +336,7 @@ __device__ void charm::send_begin_term_msg(int dst_pe) {
   size_t offset;
   envelope* env = create_envelope(msgtype::begin_terminate, msg_size, &offset);
 
-  send_msg(offset, msg_size, dst_pe);
+  send_msg(env, offset, msg_size, dst_pe);
 }
 
 __device__ void charm::send_do_term_msg(int dst_pe) {
@@ -341,6 +344,6 @@ __device__ void charm::send_do_term_msg(int dst_pe) {
   size_t offset;
   envelope* env = create_envelope(msgtype::do_terminate, msg_size, &offset);
 
-  send_msg(offset, msg_size, dst_pe);
+  send_msg(env, offset, msg_size, dst_pe);
 }
 
