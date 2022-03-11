@@ -200,4 +200,3 @@ __device__ void charm::send_do_term_msg(int dst_pe) {
 
   send_msg(env, offset, msg_size, dst_pe);
 }
-

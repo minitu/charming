@@ -15,9 +15,15 @@ SRCS += comm/get/ringbuf.cu \
         comm/get/heap.cu \
         comm/get/get.cu
 else
-SRCS += comm/put/ringbuf.cu \
-        comm/put/msg_queue.cu \
-        comm/put/put.cu
+SRCS += comm/put/ringbuf.cu
+ifeq ($(CHARMING_COMM_TYPE), 1)
+SRCS += comm/put/put_mpsc.cu
+else
+ifeq ($(CHARMING_COMM_TYPE), 2)
+SRCS += comm/put/msg_queue.cu \
+        comm/put/put_spsc.cu
+endif
+endif
 endif
 
 OBJS := $(patsubst %.cu, $(OBJ_DIR)/%.o, $(filter %.cu, $(SRCS)))
