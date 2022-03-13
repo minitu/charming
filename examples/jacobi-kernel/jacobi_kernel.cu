@@ -17,8 +17,7 @@
 
 __global__ void jacobi_1d_kernel(DataType* temp, DataType* new_temp,
     int width) {
-  int i = (blockDim.x*blockIdx.x+threadIdx.x)+1;
-  if (i <= width) {
+  for (int i = (blockDim.x*blockIdx.x+threadIdx.x)+1; i <= width; i += blockDim.x*gridDim.x) {
     new_temp[i] = (temp[i] + temp[i-1] + temp[i+1]) * DIVIDEBY3;
   }
 }
@@ -26,46 +25,54 @@ __global__ void jacobi_1d_kernel(DataType* temp, DataType* new_temp,
 
 __global__ void jacobi_2d_kernel(DataType* temp, DataType* new_temp,
     int width, int height) {
-  int i = (blockDim.x*blockIdx.x+threadIdx.x)+1;
-  int j = (blockDim.y*blockIdx.y+threadIdx.y)+1;
-  if (i <= width && j <= height) {
-    new_temp[IDX_2D(i,j)] = (temp[IDX_2D(i,j)] + temp[IDX_2D(i-1,j)]
-        + temp[IDX_2D(i+1,j)] + temp[IDX_2D(i,j-1)] + temp[IDX_2D(i,j+1)]) * DIVIDEBY5;
+  for (int i = (blockDim.x*blockIdx.x+threadIdx.x)+1; i <= width; i += blockDim.x*gridDim.x) {
+    for (int j = (blockDim.y*blockIdx.y+threadIdx.y)+1; j <= height; j += blockDim.y*gridDim.y) {
+      new_temp[IDX_2D(i,j)] = (temp[IDX_2D(i,j)] + temp[IDX_2D(i-1,j)]
+          + temp[IDX_2D(i+1,j)] + temp[IDX_2D(i,j-1)] + temp[IDX_2D(i,j+1)]) * DIVIDEBY5;
+    }
   }
 }
 
 __global__ void jacobi_3d_kernel(DataType* temp, DataType* new_temp,
     int width, int height, int depth) {
-  int i = (blockDim.x*blockIdx.x+threadIdx.x)+1;
-  int j = (blockDim.y*blockIdx.y+threadIdx.y)+1;
-  int k = (blockDim.z*blockIdx.z+threadIdx.z)+1;
-
-  if (i <= width && j <= height && k <= depth) {
-    new_temp[IDX_3D(i,j,k)] = (temp[IDX_3D(i,j,k)] +
-      temp[IDX_3D(i-1,j,k)] + temp[IDX_3D(i+1,j,k)] +
-      temp[IDX_3D(i,j-1,k)] + temp[IDX_3D(i,j+1,k)] +
-      temp[IDX_3D(i,j,k-1)] + temp[IDX_3D(i,j,k+1)]) * DIVIDEBY7;
+  for (int i = (blockDim.x*blockIdx.x+threadIdx.x)+1; i <= width; i += blockDim.x*gridDim.x) {
+    for (int j = (blockDim.y*blockIdx.y+threadIdx.y)+1; j <= height; j += blockDim.y*gridDim.y) {
+      for (int k = (blockDim.z*blockIdx.z+threadIdx.z)+1; k <= depth; k += blockDim.z*gridDim.z) {
+        new_temp[IDX_3D(i,j,k)] = (temp[IDX_3D(i,j,k)] +
+          temp[IDX_3D(i-1,j,k)] + temp[IDX_3D(i+1,j,k)] +
+          temp[IDX_3D(i,j-1,k)] + temp[IDX_3D(i,j+1,k)] +
+          temp[IDX_3D(i,j,k-1)] + temp[IDX_3D(i,j,k+1)]) * DIVIDEBY7;
+      }
+    }
   }
 }
 
-Block::Block(int width_, int height_, int depth_, int n_iters_, int warmup_iters_) {
+Block::Block(int width_, int height_, int depth_, int n_iters_, int warmup_iters_,
+    bool grid_stride_, int factor_) {
   // Store parameters
   width = width_;
   height = height_;
   depth = depth_;
   n_iters = n_iters_;
   warmup_iters = warmup_iters_;
+  grid_stride = grid_stride_;
+  factor = factor_;
 
   // Determine number of dimensions
   dims = 1;
   if (height > 0) dims++;
   if (depth > 0) dims++;
 
+  // Obtain number of SMs
+  cudaDeviceProp prop;
+  cudaGetDeviceProperties(&prop, 0);
+  n_sms = prop.multiProcessorCount;
+
   // Print configuration
   std::cout << "Config: Block size " << width << " x " << height << " x "
     << depth << " (" << dims << "D), Iters: " << n_iters << ", Warmup: "
-    << warmup_iters << std::endl;
-
+    << warmup_iters << ", Grid-stride: " << grid_stride << " ("
+    << factor << "x), Number of SMs: " << n_sms << std::endl;
 
   // Allocate memory
   temp = nullptr;
@@ -105,7 +112,12 @@ void Block::run() {
     // Invoke Jacobi kernel
     if (dims == 1) {
       dim3 block_dim(1024);
-      dim3 grid_dim((width+block_dim.x-1)/block_dim.x);
+      dim3 grid_dim;
+      if (grid_stride) {
+        grid_dim = dim3(n_sms * factor);
+      } else {
+        grid_dim = dim3((width+block_dim.x-1)/block_dim.x);
+      }
 
       jacobi_1d_kernel<<<grid_dim, block_dim, 0, stream>>>(
           temp, new_temp, width);
@@ -141,10 +153,12 @@ int main(int argc, char** argv) {
   int depth = -1;
   int n_iters = 100;
   int warmup_iters = 10;
+  bool grid_stride = false;
+  int factor = 1;
 
   // Process command line arguments
   int c;
-  while ((c = getopt(argc, argv, "x:y:z:i:w:")) != -1) {
+  while ((c = getopt(argc, argv, "x:y:z:i:w:sf:")) != -1) {
     switch(c) {
       case 'x':
         width = atoi(optarg);
@@ -161,6 +175,12 @@ int main(int argc, char** argv) {
       case 'w':
         warmup_iters = atoi(optarg);
         break;
+      case 's':
+        grid_stride = true;
+        break;
+      case 'f':
+        factor = atoi(optarg);
+        break;
       default:
         std::cerr << "Invalid argument" << std::endl;
         exit(-1);
@@ -176,7 +196,7 @@ int main(int argc, char** argv) {
 
   // Create block object
   std::cout << "Creating block object..." << std::endl;
-  Block block(width, height, depth, n_iters, warmup_iters);
+  Block block(width, height, depth, n_iters, warmup_iters, grid_stride, factor);
 
   // Execute Jacobi iterations
   block.run();

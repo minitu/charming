@@ -14,18 +14,22 @@ struct Block {
   int depth;
   int n_iters;
   int warmup_iters;
+  bool grid_stride;
+  int factor;
 
   int i;
   int j;
   int k;
   int dims;
+  int n_sms;
 
   DataType* temp;
   DataType* new_temp;
 
   cudaStream_t stream;
 
-  Block(int width_, int height_, int depth_, int n_iters_, int warmup_iters_);
+  Block(int width_, int height_, int depth_, int n_iters_, int warmup_iters_,
+      bool grid_stride_, int factor_);
   ~Block();
   void run();
 };
