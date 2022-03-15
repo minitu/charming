@@ -180,7 +180,7 @@ struct chare_proxy : chare_proxy_base {
 
   // Note: Chare should have been already created at this PE via a creation message
   inline __device__ void invoke(int idx, int ep) { invoke(idx, ep, nullptr, 0); }
-  __device__ void invoke(int idx, int ep, void* buf, size_t size) {
+  inline __device__ void invoke(int idx, int ep, void* buf, size_t size) {
     // Send a regular message to the target PE
     send_reg_msg(id, idx, ep, buf, size, loc_map[idx]);
   }
