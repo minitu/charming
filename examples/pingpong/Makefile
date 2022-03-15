@@ -1,6 +1,8 @@
 include ../../common.mk
 include ../examples.mk
 
+NVCC_CU_OPTS += -DUSER_MSG
+
 TARGET = pingpong
 
 .PHONY: all

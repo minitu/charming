@@ -31,6 +31,16 @@ struct alignas(ALIGN_SIZE) envelope {
   }
 };
 
+// Message structure for the user
+struct alignas(ALIGN_SIZE) message {
+  envelope* env;
+  size_t offset;
+
+  __device__ message() : env(nullptr), offset(0) {}
+  __device__ void alloc(size_t size);
+  __device__ void free();
+};
+
 struct alignas(ALIGN_SIZE) regular_msg {
   alignas(ALIGN_SIZE) int chare_id;
   alignas(ALIGN_SIZE) int chare_idx;
@@ -54,6 +64,7 @@ struct alignas(ALIGN_SIZE) create_msg {
 __device__ envelope* create_envelope(msgtype type, size_t msg_size, size_t* offset);
 __device__ void send_msg(envelope* env, size_t offset, size_t msg_size, int dst_pe);
 __device__ void send_reg_msg(int chare_id, int chare_idx, int ep_id, void* buf, size_t payload_size, int dst_pe);
+__device__ void send_user_msg(int chare_id, int chare_idx, int ep_id, const message& msg, int dst_pe);
 __device__ void send_begin_term_msg(int dst_pe);
 __device__ void send_do_term_msg(int dst_pe);
 

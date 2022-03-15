@@ -184,6 +184,9 @@ struct chare_proxy : chare_proxy_base {
     // Send a regular message to the target PE
     send_reg_msg(id, idx, ep, buf, size, loc_map[idx]);
   }
+  inline __device__ void invoke(int idx, int ep, const message& msg) {
+    send_user_msg(id, idx, ep, msg, loc_map[idx]);
+  }
   inline __device__ void invoke_all(int ep) { invoke_all(ep, nullptr, 0); }
   inline __device__ void invoke_all(int ep, void* buf, size_t size) {
     for (int i = 0; i < n_total; i++) {

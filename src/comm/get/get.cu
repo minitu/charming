@@ -263,6 +263,15 @@ __device__ void charm::comm::cleanup() {
 #endif // !NO_CLEANUP
 }
 
+__device__ void charm::message::alloc(size_t size) {
+  size_t msg_size = envelope::alloc_size(sizeof(regular_msg) + size);
+  env = create_envelope(msgtype::regular, msg_size, &offset);
+}
+
+__device__ void charm::message::free() {
+  // TODO
+}
+
 __device__ envelope* charm::create_envelope(msgtype type, size_t msg_size, size_t* offset) {
   // Reserve space for this message in message buffer
   ringbuf_off_t mbuf_off = mbuf->acquire(msg_size);
@@ -315,7 +324,7 @@ __device__ void charm::send_msg(envelope* env, size_t offset, size_t msg_size, i
 }
 
 __device__ void charm::send_reg_msg(int chare_id, int chare_idx, int ep_id,
-                                    void* buf, size_t payload_size, int dst_pe) {
+    void* buf, size_t payload_size, int dst_pe) {
   size_t msg_size = envelope::alloc_size(sizeof(regular_msg) + payload_size);
   size_t offset;
   envelope* env = create_envelope(msgtype::regular, msg_size, &offset);
@@ -329,6 +338,15 @@ __device__ void charm::send_reg_msg(int chare_id, int chare_idx, int ep_id,
   }
 
   send_msg(env, offset, msg_size, dst_pe);
+}
+
+__device__ void charm::send_user_msg(int chare_id, int chare_idx, int ep_id,
+    const message& msg, int dst_pe) {
+  // Set regular message fields using placement new
+  envelope* env = msg.env;
+  new ((char*)env + sizeof(envelope)) regular_msg(chare_id, chare_idx, ep_id);
+
+  send_msg(env, msg.offset, env->size, dst_pe);
 }
 
 __device__ void charm::send_begin_term_msg(int dst_pe) {

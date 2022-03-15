@@ -14,10 +14,20 @@ struct Comm : charm::chare {
   int n_iters;
   int warmup;
   int iter;
+#ifdef USER_MSG
+  charm::message msg;
+#else
   char* data;
+#endif
 
   cuda::std::chrono::time_point<cuda::std::chrono::system_clock> start_tp;
   cuda::std::chrono::time_point<cuda::std::chrono::system_clock> end_tp;
+
+#ifdef MEASURE_INVOKE
+  cuda::std::chrono::time_point<cuda::std::chrono::system_clock> invoke_start_tp;
+  cuda::std::chrono::time_point<cuda::std::chrono::system_clock> invoke_end_tp;
+  double invoke_time;
+#endif
 
   __device__ Comm() {}
   __device__ void init(void* arg);

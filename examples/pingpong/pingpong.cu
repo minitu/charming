@@ -21,10 +21,17 @@ __device__ void Comm::init(void* arg) {
   n_iters = static_cast<int>(params[param_idx++]);
   warmup = static_cast<int>(params[param_idx++]);
   iter = 0;
+#ifdef USER_MSG
+  msg.alloc(max_size);
+#else
   data = new char[max_size];
+#endif
 
   index = charm::chare::i;
   peer = (index == 0) ? 1 : 0;
+#ifdef MEASURE_INVOKE
+  invoke_time = 0;
+#endif
   printf("Chare %d init\n", index);
 
   comm_proxy->invoke(0, 1);
@@ -44,16 +51,39 @@ __device__ void Comm::send() {
     if (iter == warmup) {
       start_tp = cuda::std::chrono::system_clock::now();
     }
-#if DEBUG
+#ifdef DEBUG
     printf("Index %d iter %d sending size %lu\n", index, iter, cur_size);
 #endif
+#ifdef MEASURE_INVOKE
+    if (iter >= warmup) {
+      invoke_start_tp = cuda::std::chrono::system_clock::now();
+    }
+#endif
+#ifdef USER_MSG
+    comm_proxy->invoke(peer, 2, msg);
+#else
     comm_proxy->invoke(peer, 2, data, cur_size);
+#endif
+#ifdef MEASURE_INVOKE
+    if (iter >= warmup) {
+      invoke_end_tp = cuda::std::chrono::system_clock::now();
+    }
+    cuda::std::chrono::duration<double> diff = invoke_end_tp - invoke_start_tp;
+    invoke_time += diff.count();
+    if (iter == n_iters + warmup - 1) {
+      printf("Time per invoke: %.3lf us\n", invoke_time / n_iters * 1000000);
+    }
+#endif
   } else {
     // End iteration
-#if DEBUG
+#ifdef DEBUG
     printf("Index %d iter %d sending size %lu\n", index, iter, cur_size);
 #endif
+#ifdef USER_MSG
+    comm_proxy->invoke(peer, 2, msg);
+#else
     comm_proxy->invoke(peer, 2, data, cur_size);
+#endif
     if (++iter == n_iters + warmup) {
       cur_size *= 2;
       iter = 0;
@@ -63,7 +93,7 @@ __device__ void Comm::send() {
 
 __device__ void Comm::recv(void* arg) {
   if (index == 0) {
-#if DEBUG
+#ifdef DEBUG
     printf("Index %d iter %d received size %lu\n", index, iter, cur_size);
 #endif
     if (++iter == n_iters + warmup) {
@@ -78,7 +108,7 @@ __device__ void Comm::recv(void* arg) {
       }
     }
   } else {
-#if DEBUG
+#ifdef DEBUG
     printf("Index %d iter %d received size %lu\n", index, iter, cur_size);
 #endif
   }

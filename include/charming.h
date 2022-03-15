@@ -2,6 +2,7 @@
 #define _CHARMING_H_
 
 #include "chare.h"
+#include "message.h"
 
 // Maximum number of messages that are allowed to be in flight per pair of PEs
 #define REMOTE_MSG_COUNT_MAX 4
