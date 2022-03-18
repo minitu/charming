@@ -88,6 +88,13 @@ int main(int argc, char* argv[]) {
   char** d_argv;
   cudaMalloc(&d_argv, sizeof(char*) * argc);
   cudaMemcpyAsync(d_argv, h_argv, sizeof(char*) * argc, cudaMemcpyHostToDevice, stream);
+
+  // Transfer constants
+  cudaMemcpyToSymbolAsync(c_my_pe, &h_my_pe, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(c_n_pes, &h_n_pes, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(c_my_pe_node, &h_my_pe_node, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(c_n_pes_node, &h_n_pes_node, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(c_n_nodes, &h_n_nodes, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
   cuda_check_error();
 
   // Change device limits
@@ -102,12 +109,14 @@ int main(int argc, char* argv[]) {
   // Print configuration and launch scheduler
   cudaDeviceProp prop;
   cudaGetDeviceProperties(&prop, 0);
-  /* TODO
-  dim3 grid_dim = dim3(prop.multiProcessorCount);
-  dim3 block_dim = dim3(prop.maxThreadsPerBlock);
-  */
-  dim3 grid_dim = dim3(1);
-  dim3 block_dim = dim3(1);
+  int max_blocks_sm;
+  int n_sms = prop.multiProcessorCount;
+  int max_threads_tb = prop.maxThreadsPerBlock;
+  dim3 grid_dim = dim3(n_sms);
+  dim3 block_dim = dim3(max_threads_tb);
+  cudaOccupancyMaxActiveBlocksPerMultiprocessor(&max_blocks_sm, (const void*)scheduler,
+      block_dim.x*block_dim.y*block_dim.z, 0);
+  cuda_check_error();
   if (h_my_pe == 0) {
     PINFO("Initiating CharminG\n");
     PINFO("PEs: %d, Nodes: %d\n", h_n_pes, h_n_nodes);
@@ -115,39 +124,18 @@ int main(int argc, char* argv[]) {
         grid_dim.x, grid_dim.y, grid_dim.z, block_dim.x, block_dim.y, block_dim.z);
     PINFO("Stack size: %llu Bytes, Heap size: %llu Bytes, Clock rate: %.2lf GHz\n",
         stack_size, heap_size, (double)prop.clockRate / 1e6);
+    PINFO("Max active TBs per SM: %d, Number of SMs: %d\n", max_blocks_sm, n_sms);
   }
-
-  cudaMemcpyToSymbolAsync(c_my_pe, &h_my_pe, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(c_n_pes, &h_n_pes, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(c_my_pe_node, &h_my_pe_node, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(c_n_pes_node, &h_n_pes_node, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(c_n_nodes, &h_n_nodes, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
-  cuda_check_error();
 
   // Initialize communication module
   comm_init_host(h_n_pes);
-
   nvshmemx_barrier_all_on_stream(stream);
 
-  void* kargs[] = { &argc, &d_argv, &d_argvs };
-  /*
-  // Query largest grid size for concurrent NVSHMEM collectives
-  int grid_size;
-  int nvshmem_ret = nvshmemx_collective_launch_query_gridsize((const void*)scheduler, block_dim, kargs, 0, &grid_size);
-  if (nvshmem_ret) {
-    if (h_my_pe == 0) {
-      PERROR("nvshmemx_collective_launch_query_gridsize aborted with %d\n", nvshmem_ret);
-    }
-    return -1;
-  }
-  */
-
   // Launch scheduler kernel
-  //scheduler<<<grid_dim, block_dim, 0, stream>>>(argc, d_argv, d_argvs);
+  void* kargs[] = { &argc, &d_argv, &d_argvs };
   nvshmemx_collective_launch((const void*)scheduler, grid_dim, block_dim, kargs, 0, stream);
   cudaStreamSynchronize(stream);
   cuda_check_error();
-
   nvshmemx_barrier_all_on_stream(stream);
 
   // Cleanup
