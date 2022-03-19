@@ -11,6 +11,11 @@
 #include "heap.h"
 #include "util.h"
 
+// Maximum number of messages that are allowed to be in flight per pair of PEs
+#define REMOTE_MSG_COUNT_MAX 4
+// Maximum number of messages that can be stored in the local message queue
+#define LOCAL_MSG_COUNT_MAX 128
+
 using namespace charm;
 
 extern cudaStream_t stream;
@@ -140,16 +145,18 @@ __device__ void charm::comm::process_local() {
         c_my_pe, src_offset, msg_size);
 
     // Process message
-    process_msg(addr, begin_term_flag, do_term_flag);
+    msgtype type = process_msg(addr, nullptr, begin_term_flag, do_term_flag);
 
     // Release composite from local queue
     recv_local_comp->release();
 
 #ifndef NO_CLEANUP
-    // Store composite to be cleared from memory
-    addr_heap.push(src_composite);
-    PDEBUG("PE %d flagging local message for cleanup: offset %llu, "
-        "size %llu\n", c_my_pe, src_offset, msg_size);
+    if (type != msgtype::user) {
+      // Store composite to be cleared from memory
+      addr_heap.push(src_composite);
+      PDEBUG("PE %d flagging local message for cleanup: offset %llu, "
+          "size %llu\n", c_my_pe, src_offset, msg_size);
+    }
 #endif // !NO_CLEANUP
   }
 }
@@ -188,23 +195,26 @@ __device__ void charm::comm::process_remote() {
           msg_size, src_pe, msg_idx);
 
       // Process message
-      process_msg(dst_addr, begin_term_flag, do_term_flag);
+      msgtype type = process_msg(dst_addr, nullptr, begin_term_flag, do_term_flag);
 
       // Clear message request
       nvshmemx_signal_op(recv_remote_comp + REMOTE_MSG_COUNT_MAX * src_pe + msg_idx,
           SIGNAL_FREE, NVSHMEM_SIGNAL_SET, c_my_pe);
 
 #ifndef NO_CLEANUP
-      // Store composite to be cleared from memory
-      composite_t dst_composite(dst_offset, msg_size);
-      addr_heap.push(dst_composite);
-      PDEBUG("PE %d flagging received message for cleanup: offset %llu, "
-          "size %llu, src PE %d, idx %llu\n", c_my_pe, dst_composite.offset(),
-          dst_composite.size(), src_pe, msg_idx);
+      if (type != msgtype::user) {
+        // Store composite to be cleared from memory
+        composite_t dst_composite(dst_offset, msg_size);
+        addr_heap.push(dst_composite);
+        PDEBUG("PE %d flagging received message for cleanup: offset %llu, "
+            "size %llu, src PE %d, idx %llu\n", c_my_pe, dst_composite.offset(),
+            dst_composite.size(), src_pe, msg_idx);
+      }
 
       // Notify sender that message is ready for cleanup
+      int signal = (type == msgtype::user) ? SIGNAL_FREE : SIGNAL_CLUP;
       nvshmemx_signal_op(send_status + REMOTE_MSG_COUNT_MAX * c_my_pe + msg_idx,
-          SIGNAL_CLUP, NVSHMEM_SIGNAL_SET, src_pe);
+          signal, NVSHMEM_SIGNAL_SET, src_pe);
 #else
       // Notify sender that message has been delivered
       nvshmemx_signal_op(send_status + REMOTE_MSG_COUNT_MAX * c_my_pe + msg_idx,
@@ -265,7 +275,7 @@ __device__ void charm::comm::cleanup() {
 
 __device__ void charm::message::alloc(size_t size) {
   size_t msg_size = envelope::alloc_size(sizeof(regular_msg) + size);
-  env = create_envelope(msgtype::regular, msg_size, &offset);
+  env = create_envelope(msgtype::user, msg_size, &offset);
 }
 
 __device__ void charm::message::free() {
@@ -294,6 +304,10 @@ __device__ void charm::send_msg(envelope* env, size_t offset, size_t msg_size, i
     // Sending message to itself
     // Acquire space in local composite queue and store composite
     compbuf_off_t local_offset = recv_local_comp->acquire();
+    if (local_offset < 0) {
+      PERROR("Out of space in local composite queue\n");
+      assert(false);
+    }
     *(composite_t*)recv_local_comp->addr(local_offset) = src_composite;
     PDEBUG("PE %d sending local message: offset %llu, local %lld, size %llu\n",
         c_my_pe, offset, local_offset, msg_size);
@@ -347,6 +361,18 @@ __device__ void charm::send_user_msg(int chare_id, int chare_idx, int ep_id,
   new ((char*)env + sizeof(envelope)) regular_msg(chare_id, chare_idx, ep_id);
 
   send_msg(env, msg.offset, env->size, dst_pe);
+}
+
+__device__ void charm::send_user_msg(int chare_id, int chare_idx, int ep_id,
+    const message& msg, size_t payload_size, int dst_pe) {
+  // Set regular message fields using placement new
+  envelope* env = msg.env;
+  new ((char*)env + sizeof(envelope)) regular_msg(chare_id, chare_idx, ep_id);
+
+  // Message size can be smaller than allocated
+  size_t msg_size = envelope::alloc_size(sizeof(regular_msg) + payload_size);
+
+  send_msg(env, msg.offset, msg_size, dst_pe);
 }
 
 __device__ void charm::send_begin_term_msg(int dst_pe) {

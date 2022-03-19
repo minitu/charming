@@ -4,11 +4,6 @@
 #include "chare.h"
 #include "message.h"
 
-// Maximum number of messages that are allowed to be in flight per pair of PEs
-#define REMOTE_MSG_COUNT_MAX 4
-// Maximum number of messages that can be stored in the local message queue
-#define LOCAL_MSG_COUNT_MAX 128
-
 // Print functions
 #define PINFO(...) printf("[INFO] " __VA_ARGS__)
 #define PERROR(...) printf("[ERROR] " __VA_ARGS__)

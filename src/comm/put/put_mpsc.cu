@@ -63,11 +63,11 @@ __device__ void charm::comm::process_remote() {
   if ((len = mpsc_ringbuf_consume(rbuf, &off)) != 0) {
     // Retrieved a contiguous range, there could be multiple messages
     size_t rem = len;
-    ssize_t ret;
+    ssize_t msg_size;
     while (rem) {
-      ret = process_msg(rbuf->addr(off), begin_term_flag, do_term_flag);
-      off += ret;
-      rem -= ret;
+      process_msg(rbuf->addr(off), &msg_size, begin_term_flag, do_term_flag);
+      off += msg_size;
+      rem -= msg_size;
     }
     mpsc_ringbuf_release(rbuf, len);
   }

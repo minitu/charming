@@ -15,12 +15,15 @@ extern __constant__ int c_n_pes;
 
 extern __device__ chare_proxy_base* chare_proxies[];
 
-__device__ ssize_t charm::process_msg(void* addr, bool& begin_term_flag, bool& do_term_flag) {
+__device__ msgtype charm::process_msg(void* addr, ssize_t* processed_size,
+    bool& begin_term_flag, bool& do_term_flag) {
   envelope* env = (envelope*)addr;
+  if (processed_size) *processed_size = env->size;
+  msgtype type = env->type;
   PDEBUG("PE %d: received msg type %d size %llu from PE %d\n",
-         c_my_pe, env->type, env->size, env->src_pe);
+         c_my_pe, type, env->size, env->src_pe);
 
-  if (env->type == msgtype::create) {
+  if (type == msgtype::create) {
     // Creation message
     create_msg* msg = (create_msg*)((char*)env + sizeof(envelope));
     PDEBUG("PE %d: creation msg chare ID %d, n_local %d, n_total %d, "
@@ -34,8 +37,8 @@ __device__ ssize_t charm::process_msg(void* addr, bool& begin_term_flag, bool& d
     chare_proxy->create_local(msg->n_local, msg->n_total, msg->start_idx,
         msg->end_idx, map_ptr, obj_ptr);
 
-  } else if (env->type == msgtype::regular) {
-    // Regular message
+  } else if (type == msgtype::regular || type == msgtype::user) {
+    // Regular message (including user message)
     regular_msg* msg = (regular_msg*)((char*)env + sizeof(envelope));
     PDEBUG("PE %d: regular msg chare ID %d chare idx %d EP ID %d\n", c_my_pe,
         msg->chare_id, msg->chare_idx, msg->ep_id);
@@ -45,7 +48,7 @@ __device__ ssize_t charm::process_msg(void* addr, bool& begin_term_flag, bool& d
 
     chare_proxy->call(msg->chare_idx, msg->ep_id, payload);
 
-  } else if (env->type == msgtype::begin_terminate) {
+  } else if (type == msgtype::begin_terminate) {
     // Should only be received by PE 0
     assert(my_pe() == 0);
 
@@ -58,17 +61,17 @@ __device__ ssize_t charm::process_msg(void* addr, bool& begin_term_flag, bool& d
       begin_term_flag = true;
     }
 
-  } else if (env->type == msgtype::do_terminate) {
+  } else if (type == msgtype::do_terminate) {
     // Do termination message
     PDEBUG("PE %d: do terminate msg\n", c_my_pe);
     do_term_flag = true;
 
   } else {
-    PERROR("PE %d: unrecognized message type %d\n", c_my_pe, env->type);
+    PERROR("PE %d: unrecognized message type %d\n", c_my_pe, type);
     assert(false);
   }
 
-  return env->size;
+  return type;
 }
 
 __device__ __forceinline__ void loop(comm& c) {

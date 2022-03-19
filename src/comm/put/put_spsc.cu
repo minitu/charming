@@ -120,7 +120,8 @@ __device__ void charm::comm::process_remote() {
     if (recv_meta->read < write) {
       // There are messages to process
       MsgQueueShell& msgq_shell = msg_queue_shell[src_pe];
-      ssize_t msg_size = process_msg(msgq_shell.addr(recv_meta->read),
+      ssize_t msg_size;
+      process_msg(msgq_shell.addr(recv_meta->read), &msg_size
           begin_term_flag, do_term_flag);
       recv_meta->read += msg_size;
     }

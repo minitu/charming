@@ -60,7 +60,7 @@ __device__ void Comm::send() {
     }
 #endif
 #ifdef USER_MSG
-    comm_proxy->invoke(peer, 2, msg);
+    comm_proxy->invoke(peer, 2, msg, cur_size);
 #else
     comm_proxy->invoke(peer, 2, data, cur_size);
 #endif
@@ -80,7 +80,7 @@ __device__ void Comm::send() {
     printf("Index %d iter %d sending size %lu\n", index, iter, cur_size);
 #endif
 #ifdef USER_MSG
-    comm_proxy->invoke(peer, 2, msg);
+    comm_proxy->invoke(peer, 2, msg, cur_size);
 #else
     comm_proxy->invoke(peer, 2, data, cur_size);
 #endif
