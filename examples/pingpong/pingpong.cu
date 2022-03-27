@@ -117,30 +117,34 @@ __device__ void Comm::recv(void* arg) {
 
 // Main
 __device__ void charm::main(int argc, char** argv, size_t* argvs) {
-  if (charm::n_pes() != 2) {
-    printf("Need exactly 2 PEs!\n");
-    charm::end();
-    return;
+  constexpr int n_params = 4;
+  size_t params[n_params] = {1, 65536, 100, 10};
+
+  if (threadIdx.x == 0) {
+    if (charm::n_pes() != 2) {
+      printf("Need exactly 2 PEs!\n");
+      charm::end();
+      return;
+    }
+
+    // Process command line arguments
+    if (argc >= 2) params[0] = charm::device_atoi(argv[1], argvs[1]);
+    if (argc >= 3) params[1] = charm::device_atoi(argv[2], argvs[2]);
+    if (argc >= 4) params[2] = charm::device_atoi(argv[3], argvs[3]);
+    if (argc >= 5) params[3] = charm::device_atoi(argv[4], argvs[4]);
+
+    printf("Pingpong\n");
+    printf("Size: %llu - %llu\n", params[0], params[1]);
+    printf("Iterations: %d (Warmup: %d)\n", (int)params[2], (int)params[3]);
   }
-
-  // Process command line arguments
-  size_t min_size = 1;
-  if (argc >= 2) min_size = charm::device_atoi(argv[1], argvs[1]);
-  size_t max_size = 65536;
-  if (argc >= 3) max_size = charm::device_atoi(argv[2], argvs[2]);
-  int n_iters = 100;
-  if (argc >= 4) n_iters = charm::device_atoi(argv[3], argvs[3]);
-  int warmup = 10;
-  if (argc >= 5) warmup = charm::device_atoi(argv[4], argvs[4]);
-
-  printf("Pingpong\n");
-  printf("Size: %llu - %llu\n", min_size, max_size);
-  printf("Iterations: %d (Warmup: %d)\n", n_iters, warmup);
+  __syncthreads();
 
   Comm comm;
   comm_proxy->create(comm, 2);
-  constexpr int n_params = 4;
-  size_t params[n_params] = { min_size, max_size,
-    static_cast<size_t>(n_iters), static_cast<size_t>(warmup)};
-  comm_proxy->invoke_all(0, params, sizeof(size_t) * n_params);
+  __syncthreads();
+
+  if (threadIdx.x == 0) {
+    comm_proxy->invoke_all(0, params, sizeof(size_t) * n_params);
+  }
+  __syncthreads();
 }

@@ -81,29 +81,34 @@ __device__ __forceinline__ void loop(comm& c) {
 }
 
 __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
-  if (!blockIdx.x && !threadIdx.x) {
-    // Create communication module on the stack
-    comm c;
+  // TODO: Currently only 1 thread block per GPU
+  if (blockIdx.x == 0) {
+    comm c; // FIXME: Only needed for the leader thread
 
-    // Register user chares and entry methods on all PEs
-    chare_proxy_cnt = 0;
-    register_chares();
-
+    if (threadIdx.x == 0) {
+      // Register user chares and entry methods on all PEs
+      chare_proxy_cnt = 0;
+      register_chares();
+    }
+    __syncthreads();
     nvshmem_barrier_all();
 
     if (c_my_pe == 0) {
       // Execute user's main function
       main(argc, argv, argvs);
     }
-
-    // FIXME: Is this barrier necessary?
-    nvshmem_barrier_all();
+    __syncthreads();
+    //nvshmem_barrier_all();
 
     // Loop until termination
-    do {
-      loop(c);
-    } while (!c.do_term_flag);
+    if (threadIdx.x == 0) {
+      do {
+        loop(c);
+      } while (!c.do_term_flag);
+    }
 
-    PDEBUG("PE %d terminating...\n", c_my_pe);
+    if (threadIdx.x == 0) {
+      PDEBUG("PE %d terminating...\n", c_my_pe);
+    }
   }
 }

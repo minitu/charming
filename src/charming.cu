@@ -133,7 +133,8 @@ int main(int argc, char* argv[]) {
 
   // Launch scheduler kernel
   void* kargs[] = { &argc, &d_argv, &d_argvs };
-  nvshmemx_collective_launch((const void*)scheduler, grid_dim, block_dim, kargs, 0, stream);
+  size_t smem_size = sizeof(uint64_t) * 3;
+  nvshmemx_collective_launch((const void*)scheduler, grid_dim, block_dim, kargs, smem_size, stream);
   cudaStreamSynchronize(stream);
   cuda_check_error();
   nvshmemx_barrier_all_on_stream(stream);
