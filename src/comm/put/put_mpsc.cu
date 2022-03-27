@@ -48,7 +48,7 @@ void charm::comm_fini_host(int n_pes) {
   mpsc_ringbuf_free(h_rbuf);
 }
 
-__device__ charm::comm::comm() {
+__device__ void charm::comm::init() {
   begin_term_flag = false;
   do_term_flag = false;
 

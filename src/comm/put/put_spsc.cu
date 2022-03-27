@@ -97,7 +97,7 @@ void charm::comm_fini_host(int n_pes) {
   spsc_ringbuf_free(h_mbuf);
 }
 
-__device__ charm::comm::comm() {
+__device__ void charm::comm::init() {
   begin_term_flag = false;
   do_term_flag = false;
 
@@ -121,7 +121,7 @@ __device__ void charm::comm::process_remote() {
       // There are messages to process
       MsgQueueShell& msgq_shell = msg_queue_shell[src_pe];
       ssize_t msg_size;
-      process_msg(msgq_shell.addr(recv_meta->read), &msg_size
+      process_msg(msgq_shell.addr(recv_meta->read), &msg_size,
           begin_term_flag, do_term_flag);
       recv_meta->read += msg_size;
     }
