@@ -126,6 +126,7 @@ struct chare_proxy : chare_proxy_base {
     if (threadIdx.x == 0) {
       loc_map = new int[n];
     }
+    __syncthreads();
     int n_this = -1;
     int start_idx_ = 0;
     int end_idx_ = 0;
@@ -148,7 +149,6 @@ struct chare_proxy : chare_proxy_base {
       start_idx_ += n_this;
       __syncthreads();
     }
-    if (my_pe == 0 && threadIdx.x == 0) printf("!!! before creating chares\n");
 
     // Create chares
     n_this = -1;
@@ -206,7 +206,6 @@ struct chare_proxy : chare_proxy_base {
       start_idx_ += n_this;
       __syncthreads();
     }
-    if (my_pe == 0 && threadIdx.x == 0) printf("!!! end of creating chares\n");
   }
 
   __device__ virtual void call(int idx, int ep, void* arg) {

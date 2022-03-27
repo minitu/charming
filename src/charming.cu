@@ -113,7 +113,8 @@ int main(int argc, char* argv[]) {
   int n_sms = prop.multiProcessorCount;
   int max_threads_tb = prop.maxThreadsPerBlock;
   dim3 grid_dim = dim3(n_sms);
-  dim3 block_dim = dim3(max_threads_tb);
+  //dim3 block_dim = dim3(max_threads_tb);
+  dim3 block_dim = dim3(128);
   cudaOccupancyMaxActiveBlocksPerMultiprocessor(&max_blocks_sm, (const void*)scheduler,
       block_dim.x*block_dim.y*block_dim.z, 0);
   cuda_check_error();
