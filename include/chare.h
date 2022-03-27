@@ -5,7 +5,7 @@
 #include <nvfunctional>
 #include "message.h"
 
-extern __shared__ uint64_t smem[];
+extern __shared__ uint64_t s_mem[];
 
 namespace charm {
 
@@ -104,9 +104,9 @@ struct chare_proxy : chare_proxy_base {
       }
       __syncthreads();
       if (threadIdx.x == 0) {
-        smem[0] = (uint64_t)loc_map;
-        smem[1] = (uint64_t)map_ptr;
-        smem[2] = (uint64_t)(sizeof(int) * n_total);
+        s_mem[0] = (uint64_t)loc_map;
+        s_mem[1] = (uint64_t)map_ptr;
+        s_mem[2] = (uint64_t)(sizeof(int) * n_total);
         memcpy(loc_map, map_ptr, sizeof(int) * n_total);
       }
       __syncthreads();
@@ -185,9 +185,9 @@ struct chare_proxy : chare_proxy_base {
 
           // Pack location map and seed object
           tmp = (char*)msg + sizeof(create_msg);
-          smem[0] = (uint64_t)tmp;
-          smem[1] = (uint64_t)loc_map;
-          smem[2] = (uint64_t)map_size;
+          s_mem[0] = (uint64_t)tmp;
+          s_mem[1] = (uint64_t)loc_map;
+          s_mem[2] = (uint64_t)map_size;
           memcpy(tmp, loc_map, map_size); // TODO
         }
         __syncthreads();

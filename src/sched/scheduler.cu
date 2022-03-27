@@ -15,6 +15,8 @@ extern __constant__ int c_n_pes;
 
 extern __device__ chare_proxy_base* chare_proxies[];
 
+extern __shared__ uint64_t s_mem[];
+
 __device__ msgtype charm::process_msg(void* addr, ssize_t* processed_size,
     bool& begin_term_flag, bool& do_term_flag) {
   envelope* env = (envelope*)addr;
@@ -74,18 +76,23 @@ __device__ msgtype charm::process_msg(void* addr, ssize_t* processed_size,
   return type;
 }
 
-__device__ __forceinline__ void loop(comm& c) {
-  c.process_local();
-  c.process_remote();
-  c.cleanup();
+__device__ __forceinline__ void loop(comm* c) {
+  c->process_local();
+  c->process_remote();
+  c->cleanup();
 }
 
 __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
   // TODO: Currently only 1 thread block per GPU
   if (blockIdx.x == 0) {
-    comm c; // FIXME: Only needed for the leader thread
+    // Communication module resides in shared memory
+    // 32 bytes from start of shared memory for alignment
+    comm* c = (comm*)(s_mem+4);
 
     if (threadIdx.x == 0) {
+      // Initialize comm module
+      c->init();
+
       // Register user chares and entry methods on all PEs
       chare_proxy_cnt = 0;
       register_chares();
@@ -104,7 +111,7 @@ __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
     if (threadIdx.x == 0) {
       do {
         loop(c);
-      } while (!c.do_term_flag);
+      } while (!c->do_term_flag);
     }
 
     if (threadIdx.x == 0) {

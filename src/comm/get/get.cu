@@ -127,7 +127,7 @@ void charm::comm_fini_host(int n_pes) {
   cudaFree(h_recv_local_comp_d);
 }
 
-__device__ charm::comm::comm() {
+__device__ void charm::comm::init() {
   addr_heap.init(heap_buf, heap_buf_size / sizeof(uint64_t));
   begin_term_flag = false;
   do_term_flag = false;

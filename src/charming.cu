@@ -99,6 +99,7 @@ int main(int argc, char* argv[]) {
 
   // Change device limits
   size_t stack_size, heap_size;
+  size_t smem_size = 1024;
   constexpr size_t new_stack_size = 16384;
   cudaDeviceSetLimit(cudaLimitStackSize, new_stack_size);
   cudaDeviceGetLimit(&stack_size, cudaLimitStackSize);
@@ -123,8 +124,9 @@ int main(int argc, char* argv[]) {
     PINFO("PEs: %d, Nodes: %d\n", h_n_pes, h_n_nodes);
     PINFO("Thread grid: %d x %d x %d, Thread block: %d x %d x %d\n",
         grid_dim.x, grid_dim.y, grid_dim.z, block_dim.x, block_dim.y, block_dim.z);
-    PINFO("Stack size: %llu Bytes, Heap size: %llu Bytes, Clock rate: %.2lf GHz\n",
-        stack_size, heap_size, (double)prop.clockRate / 1e6);
+    PINFO("Stack size: %llu Bytes, Heap size: %llu Bytes\n", stack_size, heap_size);
+    PINFO("Shared memory size: %llu Bytes, Clock rate: %.2lf GHz\n",
+        smem_size, (double)prop.clockRate / 1e6);
     PINFO("Max active TBs per SM: %d, Number of SMs: %d\n", max_blocks_sm, n_sms);
   }
 
@@ -134,7 +136,6 @@ int main(int argc, char* argv[]) {
 
   // Launch scheduler kernel
   void* kargs[] = { &argc, &d_argv, &d_argvs };
-  size_t smem_size = sizeof(uint64_t) * 3;
   nvshmemx_collective_launch((const void*)scheduler, grid_dim, block_dim, kargs, smem_size, stream);
   cudaStreamSynchronize(stream);
   cuda_check_error();
