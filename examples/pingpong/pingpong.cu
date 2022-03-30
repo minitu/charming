@@ -11,37 +11,41 @@ __device__ void charm::register_chares() {
 }
 
 __device__ void Comm::init(void* arg) {
-  size_t* params = (size_t*)arg;
-  int param_idx = 0;
+  if (threadIdx.x == 0) {
+    size_t* params = (size_t*)arg;
+    int param_idx = 0;
 
-  init_cnt = 0;
-  min_size = params[param_idx++];
-  max_size = params[param_idx++];
-  cur_size = min_size;
-  n_iters = static_cast<int>(params[param_idx++]);
-  warmup = static_cast<int>(params[param_idx++]);
-  iter = 0;
+    init_cnt = 0;
+    min_size = params[param_idx++];
+    max_size = params[param_idx++];
+    cur_size = min_size;
+    n_iters = static_cast<int>(params[param_idx++]);
+    warmup = static_cast<int>(params[param_idx++]);
+    iter = 0;
 #ifdef USER_MSG
-  msg.alloc(max_size);
+    msg.alloc(max_size);
 #else
-  data = new char[max_size];
+    data = new char[max_size];
 #endif
 
-  index = charm::chare::i;
-  peer = (index == 0) ? 1 : 0;
+    index = charm::chare::i;
+    peer = (index == 0) ? 1 : 0;
 #ifdef MEASURE_INVOKE
-  invoke_time = 0;
+    invoke_time = 0;
 #endif
-  printf("Chare %d init\n", index);
+    printf("Chare %d init\n", index);
 
-  comm_proxy->invoke(0, 1);
+    comm_proxy->invoke(0, 1);
+  }
 }
 
 __device__ void Comm::init_done(void* arg) {
-  if (++init_cnt == 2) {
-    printf("Init done\n");
+  if (threadIdx.x == 0) {
+    if (++init_cnt == 2) {
+      printf("Init done\n");
 
-    send();
+      send();
+    }
   }
 }
 
@@ -92,27 +96,29 @@ __device__ void Comm::send() {
 }
 
 __device__ void Comm::recv(void* arg) {
-  if (index == 0) {
+  if (threadIdx.x == 0) {
+    if (index == 0) {
 #ifdef DEBUG
-    printf("Index %d iter %d received size %lu\n", index, iter, cur_size);
+      printf("Index %d iter %d received size %lu\n", index, iter, cur_size);
 #endif
-    if (++iter == n_iters + warmup) {
-      end_tp = cuda::std::chrono::system_clock::now();
-      cuda::std::chrono::duration<double> diff = end_tp - start_tp;
-      printf("Size %llu took %.3lf us\n", cur_size, (diff.count() / 2 / n_iters) * 1000000);
-      cur_size *= 2;
-      iter = 0;
-      if (cur_size > max_size) {
-        charm::end();
-        return;
+      if (++iter == n_iters + warmup) {
+        end_tp = cuda::std::chrono::system_clock::now();
+        cuda::std::chrono::duration<double> diff = end_tp - start_tp;
+        printf("Size %llu took %.3lf us\n", cur_size, (diff.count() / 2 / n_iters) * 1000000);
+        cur_size *= 2;
+        iter = 0;
+        if (cur_size > max_size) {
+          charm::end();
+          return;
+        }
       }
-    }
-  } else {
+    } else {
 #ifdef DEBUG
-    printf("Index %d iter %d received size %lu\n", index, iter, cur_size);
+      printf("Index %d iter %d received size %lu\n", index, iter, cur_size);
 #endif
+    }
+    send();
   }
-  send();
 }
 
 // Main

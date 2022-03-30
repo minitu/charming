@@ -188,7 +188,8 @@ struct chare_proxy : chare_proxy_base {
           s_mem[0] = (uint64_t)tmp;
           s_mem[1] = (uint64_t)loc_map;
           s_mem[2] = (uint64_t)map_size;
-          memcpy(tmp, loc_map, map_size); // TODO
+          // TODO: Implement a memcpy kernel
+          memcpy(tmp, loc_map, map_size);
         }
         __syncthreads();
 

@@ -20,17 +20,22 @@ extern __shared__ uint64_t s_mem[];
 __device__ msgtype charm::process_msg(void* addr, ssize_t* processed_size,
     bool& begin_term_flag, bool& do_term_flag) {
   envelope* env = (envelope*)addr;
-  if (processed_size) *processed_size = env->size;
   msgtype type = env->type;
-  PDEBUG("PE %d: received msg type %d size %llu from PE %d\n",
-         c_my_pe, type, env->size, env->src_pe);
+  if (threadIdx.x == 0) {
+    if (processed_size) *processed_size = env->size;
+    PDEBUG("PE %d: received msg type %d size %llu from PE %d\n",
+           c_my_pe, type, env->size, env->src_pe);
+  }
+  __syncthreads();
 
   if (type == msgtype::create) {
     // Creation message
     create_msg* msg = (create_msg*)((char*)env + sizeof(envelope));
-    PDEBUG("PE %d: creation msg chare ID %d, n_local %d, n_total %d, "
-        "start idx %d, end idx %d\n", c_my_pe, msg->chare_id, msg->n_local,
-        msg->n_total, msg->start_idx, msg->end_idx);
+    if (threadIdx.x == 0) {
+      PDEBUG("PE %d: creation msg chare ID %d, n_local %d, n_total %d, "
+          "start idx %d, end idx %d\n", c_my_pe, msg->chare_id, msg->n_local,
+          msg->n_total, msg->start_idx, msg->end_idx);
+    }
 
     chare_proxy_base*& chare_proxy = chare_proxies[msg->chare_id];
     char* map_ptr = (char*)msg + sizeof(create_msg);
@@ -42,8 +47,10 @@ __device__ msgtype charm::process_msg(void* addr, ssize_t* processed_size,
   } else if (type == msgtype::regular || type == msgtype::user) {
     // Regular message (including user message)
     regular_msg* msg = (regular_msg*)((char*)env + sizeof(envelope));
-    PDEBUG("PE %d: regular msg chare ID %d chare idx %d EP ID %d\n", c_my_pe,
-        msg->chare_id, msg->chare_idx, msg->ep_id);
+    if (threadIdx.x == 0) {
+      PDEBUG("PE %d: regular msg chare ID %d chare idx %d EP ID %d\n", c_my_pe,
+          msg->chare_id, msg->chare_idx, msg->ep_id);
+    }
 
     chare_proxy_base*& chare_proxy = chare_proxies[msg->chare_id];
     void* payload = (char*)msg + sizeof(regular_msg);
@@ -52,24 +59,32 @@ __device__ msgtype charm::process_msg(void* addr, ssize_t* processed_size,
 
   } else if (type == msgtype::begin_terminate) {
     // Should only be received by PE 0
-    assert(my_pe() == 0);
+    assert(c_my_pe == 0);
 
     // Begin termination message
+    if (threadIdx.x == 0) {
     PDEBUG("PE %d: begin terminate msg\n", c_my_pe);
-    if (!begin_term_flag) {
-      for (int i = 0; i < n_pes(); i++) {
-        send_do_term_msg(i);
+      if (!begin_term_flag) {
+        for (int i = 0; i < n_pes(); i++) {
+          send_do_term_msg(i);
+        }
+        begin_term_flag = true;
       }
-      begin_term_flag = true;
     }
+    __syncthreads();
 
   } else if (type == msgtype::do_terminate) {
     // Do termination message
-    PDEBUG("PE %d: do terminate msg\n", c_my_pe);
-    do_term_flag = true;
+    if (threadIdx.x == 0) {
+      PDEBUG("PE %d: do terminate msg\n", c_my_pe);
+      do_term_flag = true;
+    }
+    __syncthreads();
 
   } else {
-    PERROR("PE %d: unrecognized message type %d\n", c_my_pe, type);
+    if (threadIdx.x == 0) {
+      PERROR("PE %d: unrecognized message type %d\n", c_my_pe, type);
+    }
     assert(false);
   }
 
@@ -108,11 +123,9 @@ __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
     //nvshmem_barrier_all();
 
     // Loop until termination
-    if (threadIdx.x == 0) {
-      do {
-        loop(c);
-      } while (!c->do_term_flag);
-    }
+    do {
+      loop(c);
+    } while (!c->do_term_flag);
 
     if (threadIdx.x == 0) {
       PDEBUG("PE %d terminating...\n", c_my_pe);

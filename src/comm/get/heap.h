@@ -1,12 +1,10 @@
 #ifndef _HEAP_H_
 #define _HEAP_H_
 
-#define ALIGN_SIZE 16
-
 #include <cstdint>
 #include "composite.h"
 
-struct alignas(ALIGN_SIZE) min_heap {
+struct min_heap {
   composite_t* buf;
   const int batch_size = 1;
   size_t size;

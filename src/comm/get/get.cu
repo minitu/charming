@@ -39,6 +39,9 @@ __device__ size_t* recv_remote_comp_idx;
 __device__ composite_t* heap_buf;
 __device__ size_t heap_buf_size;
 
+// GPU shared memory
+extern __shared__ uint64_t s_mem[];
+
 // Host memory
 uint64_t* h_send_status;
 uint64_t* h_recv_remote_comp;
@@ -134,19 +137,31 @@ __device__ void charm::comm::init() {
 }
 
 __device__ void charm::comm::process_local() {
+  composite_t src_composite;
+  void* addr;
+
   // Check local composite queue
-  if (recv_local_comp->count > 0) {
-    uint64_t data = *(recv_local_comp->addr(recv_local_comp->read));
-    composite_t src_composite(data);
-    size_t src_offset = src_composite.offset();
-    size_t msg_size = src_composite.size();
-    void* addr = mbuf->addr(src_offset);
-    PDEBUG("PE %d receiving local message: offset %llu, size %llu\n",
-        c_my_pe, src_offset, msg_size);
+  if (threadIdx.x == 0) {
+    if (recv_local_comp->count > 0) {
+      uint64_t data = *(recv_local_comp->addr(recv_local_comp->read));
+      src_composite = composite_t(data);
+      size_t src_offset = src_composite.offset();
+      size_t msg_size = src_composite.size();
+      addr = mbuf->addr(src_offset);
+      s_mem[1] = (uint64_t)addr; // Store in shared memory for other threads
+      PDEBUG("PE %d receiving local message: offset %llu, size %llu\n",
+          c_my_pe, src_offset, msg_size);
+    }
+  }
+  __syncthreads();
+  if (threadIdx.x > 0) {
+    addr = (void*)s_mem[1]; // Fetch message address from shared memory
+  }
 
-    // Process message
-    msgtype type = process_msg(addr, nullptr, begin_term_flag, do_term_flag);
+  // Process message in parallel
+  msgtype type = process_msg(addr, nullptr, begin_term_flag, do_term_flag);
 
+  if (threadIdx.x == 0) {
     // Release composite from local queue
     recv_local_comp->release();
 
@@ -159,116 +174,158 @@ __device__ void charm::comm::process_local() {
     }
 #endif // !NO_CLEANUP
   }
+  __syncthreads();
 }
 
 __device__ void charm::comm::process_remote() {
+  size_t count;
+  void* dst_addr;
+
   // Check if there are any message requests
-  size_t count = nvshmem_uint64_test_some(recv_remote_comp, REMOTE_MSG_COUNT_MAX * c_n_pes,
-      recv_remote_comp_idx, nullptr, NVSHMEM_CMP_GT, 0);
+  if (threadIdx.x == 0) {
+    count = nvshmem_uint64_test_some(recv_remote_comp, REMOTE_MSG_COUNT_MAX * c_n_pes,
+        recv_remote_comp_idx, nullptr, NVSHMEM_CMP_GT, 0);
+    s_mem[2] = (uint64_t)count;
+  }
+  __syncthreads();
+  if (threadIdx.x > 0) {
+    count = (size_t)s_mem[2];
+  }
+
   if (count > 0) {
     for (size_t i = 0; i < count; i++) {
-      // Obtain information about this message request
-      size_t msg_idx = recv_remote_comp_idx[i];
-      uint64_t data = nvshmem_signal_fetch(recv_remote_comp + msg_idx);
-      composite_t src_composite(data);
-      size_t src_offset = src_composite.offset();
-      size_t msg_size = src_composite.size();
-      int src_pe = msg_idx / REMOTE_MSG_COUNT_MAX;
-      msg_idx -= REMOTE_MSG_COUNT_MAX * src_pe;
+      size_t msg_idx;
+      size_t msg_size;
+      int src_pe;
+      ringbuf_off_t dst_offset;
 
-      // Reserve space for incoming message
-      ringbuf_off_t dst_offset = mbuf->acquire(msg_size);
-      if (dst_offset == -1) {
-        PERROR("PE %d: Not enough space in message buffer\n", c_my_pe);
-        assert(false);
+      if (threadIdx.x == 0) {
+        // Obtain information about this message request
+        msg_idx = recv_remote_comp_idx[i];
+        uint64_t data = nvshmem_signal_fetch(recv_remote_comp + msg_idx);
+        composite_t src_composite(data);
+        size_t src_offset = src_composite.offset();
+        msg_size = src_composite.size();
+        src_pe = msg_idx / REMOTE_MSG_COUNT_MAX;
+        msg_idx -= REMOTE_MSG_COUNT_MAX * src_pe;
+
+        // Reserve space for incoming message
+        dst_offset = mbuf->acquire(msg_size);
+        if (dst_offset == -1) {
+          PERROR("PE %d: Not enough space in message buffer\n", c_my_pe);
+          assert(false);
+        }
+        PDEBUG("PE %d acquired message: offset %llu, size %llu\n",
+            c_my_pe, dst_offset, msg_size);
+
+        // Perform a get operation to fetch the message
+        // TODO: Make asynchronous
+        dst_addr = mbuf->addr(dst_offset);
+        s_mem[1] = (uint64_t)dst_addr;
+        nvshmem_char_get((char*)dst_addr, (char*)mbuf->addr(src_offset),
+            msg_size, src_pe);
+        PDEBUG("PE %d receiving message: src offset %llu, dst offset %llu, "
+            "size %llu, src PE %d, idx %llu\n", c_my_pe, src_offset, dst_offset,
+            msg_size, src_pe, msg_idx);
       }
-      PDEBUG("PE %d acquired message: offset %llu, size %llu\n",
-          c_my_pe, dst_offset, msg_size);
+      __syncthreads();
+      if (threadIdx.x > 0) {
+        dst_addr = (void*)s_mem[1];
+      }
 
-      // Perform a get operation to fetch the message
-      // TODO: Make asynchronous
-      void* dst_addr = mbuf->addr(dst_offset);
-      nvshmem_char_get((char*)dst_addr, (char*)mbuf->addr(src_offset),
-          msg_size, src_pe);
-      PDEBUG("PE %d receiving message: src offset %llu, dst offset %llu, "
-          "size %llu, src PE %d, idx %llu\n", c_my_pe, src_offset, dst_offset,
-          msg_size, src_pe, msg_idx);
-
-      // Process message
+      // Process message in parallel
       msgtype type = process_msg(dst_addr, nullptr, begin_term_flag, do_term_flag);
 
-      // Clear message request
-      nvshmemx_signal_op(recv_remote_comp + REMOTE_MSG_COUNT_MAX * src_pe + msg_idx,
-          SIGNAL_FREE, NVSHMEM_SIGNAL_SET, c_my_pe);
+      if (threadIdx.x == 0) {
+        // Clear message request
+        nvshmemx_signal_op(recv_remote_comp + REMOTE_MSG_COUNT_MAX * src_pe + msg_idx,
+            SIGNAL_FREE, NVSHMEM_SIGNAL_SET, c_my_pe);
 
 #ifndef NO_CLEANUP
-      if (type != msgtype::user) {
-        // Store composite to be cleared from memory
-        composite_t dst_composite(dst_offset, msg_size);
-        addr_heap.push(dst_composite);
-        PDEBUG("PE %d flagging received message for cleanup: offset %llu, "
-            "size %llu, src PE %d, idx %llu\n", c_my_pe, dst_composite.offset(),
-            dst_composite.size(), src_pe, msg_idx);
-      }
+        if (type != msgtype::user) {
+          // Store composite to be cleared from memory
+          composite_t dst_composite(dst_offset, msg_size);
+          addr_heap.push(dst_composite);
+          PDEBUG("PE %d flagging received message for cleanup: offset %llu, "
+              "size %llu, src PE %d, idx %llu\n", c_my_pe, dst_composite.offset(),
+              dst_composite.size(), src_pe, msg_idx);
+        }
 
-      // Notify sender that message is ready for cleanup
-      int signal = (type == msgtype::user) ? SIGNAL_FREE : SIGNAL_CLUP;
-      nvshmemx_signal_op(send_status + REMOTE_MSG_COUNT_MAX * c_my_pe + msg_idx,
-          signal, NVSHMEM_SIGNAL_SET, src_pe);
+        // Notify sender that message is ready for cleanup
+        int signal = (type == msgtype::user) ? SIGNAL_FREE : SIGNAL_CLUP;
+        nvshmemx_signal_op(send_status + REMOTE_MSG_COUNT_MAX * c_my_pe + msg_idx,
+            signal, NVSHMEM_SIGNAL_SET, src_pe);
 #else
-      // Notify sender that message has been delivered
-      nvshmemx_signal_op(send_status + REMOTE_MSG_COUNT_MAX * c_my_pe + msg_idx,
-          SIGNAL_FREE, NVSHMEM_SIGNAL_SET, src_pe);
+        // Notify sender that message has been delivered
+        nvshmemx_signal_op(send_status + REMOTE_MSG_COUNT_MAX * c_my_pe + msg_idx,
+            SIGNAL_FREE, NVSHMEM_SIGNAL_SET, src_pe);
 #endif // !NO_CLEANUP
+      }
     }
 
     // Reset indices array for next use
-    for (int i = 0; i < REMOTE_MSG_COUNT_MAX * c_n_pes; i++) {
-      recv_remote_comp_idx[i] = 0;
+    // TODO: Implement memset kernel
+    if (threadIdx.x == 0) {
+      memset(recv_remote_comp_idx, 0, REMOTE_MSG_COUNT_MAX * c_n_pes * sizeof(size_t));
     }
-    //memset(recv_remote_comp_idx, 0, REMOTE_MSG_COUNT_MAX * c_n_pes * sizeof(size_t));
   }
 }
 
 __device__ void charm::comm::cleanup() {
 #ifndef NO_CLEANUP
+  size_t count;
+
   // Check for messages that have been delivered to the destination PE
-  size_t count = nvshmem_uint64_test_some(send_status, REMOTE_MSG_COUNT_MAX * c_n_pes,
-      send_status_idx, nullptr, NVSHMEM_CMP_EQ, SIGNAL_CLUP);
+  if (threadIdx.x == 0) {
+    count = nvshmem_uint64_test_some(send_status, REMOTE_MSG_COUNT_MAX * c_n_pes,
+        send_status_idx, nullptr, NVSHMEM_CMP_EQ, SIGNAL_CLUP);
+    s_mem[2] = (uint64_t)count;
+  }
+  __syncthreads();
+  if (threadIdx.x > 0) {
+    count = (size_t)s_mem[2];
+  }
+
   if (count > 0) {
-    for (size_t i = 0; i < count; i++) {
-      size_t msg_idx = send_status_idx[i];
+    if (threadIdx.x == 0) {
+      for (size_t i = 0; i < count; i++) {
+        size_t msg_idx = send_status_idx[i];
 
-      // Store composite to be cleared from memory
-      composite_t src_composite(send_comp[msg_idx]);
-      addr_heap.push(src_composite);
-      PDEBUG("PE %d flagging sent message for cleanup: offset %llu, size %llu, "
-          "dst PE %llu, idx %llu\n", c_my_pe, src_composite.offset(),
-          src_composite.size(), msg_idx / REMOTE_MSG_COUNT_MAX,
-          msg_idx % REMOTE_MSG_COUNT_MAX);
+        // Store composite to be cleared from memory
+        composite_t src_composite(send_comp[msg_idx]);
+        addr_heap.push(src_composite);
+        PDEBUG("PE %d flagging sent message for cleanup: offset %llu, size %llu, "
+            "dst PE %llu, idx %llu\n", c_my_pe, src_composite.offset(),
+            src_composite.size(), msg_idx / REMOTE_MSG_COUNT_MAX,
+            msg_idx % REMOTE_MSG_COUNT_MAX);
 
-      // Reset signal to SIGNAL_FREE
-      nvshmemx_signal_op(send_status + msg_idx, SIGNAL_FREE,
-          NVSHMEM_SIGNAL_SET, c_my_pe);
+        // Reset signal to SIGNAL_FREE
+        nvshmemx_signal_op(send_status + msg_idx, SIGNAL_FREE,
+            NVSHMEM_SIGNAL_SET, c_my_pe);
+      }
+
+      // Reset indices array for next use
+      // TODO: Implement memset kernel
+      memset(send_status_idx, 0, REMOTE_MSG_COUNT_MAX * c_n_pes * sizeof(size_t));
     }
-
-    // Reset indices array for next use
-    memset(send_status_idx, 0, REMOTE_MSG_COUNT_MAX * c_n_pes * sizeof(size_t));
+    __syncthreads();
   }
 
   // Clean up messages
-  while (true) {
-    composite_t comp = addr_heap.top();
-    if (comp.data == UINT64_MAX) break;
+  if (threadIdx.x == 0) {
+    while (true) {
+      composite_t comp = addr_heap.top();
+      if (comp.data == UINT64_MAX) break;
 
-    size_t clup_offset = comp.offset();
-    size_t clup_size = comp.size();
-    if (clup_offset == mbuf->read && clup_size > 0) {
-      mbuf->release(clup_size);
-      addr_heap.pop();
-      PDEBUG("PE %d releasing message: offset %llu, size %llu\n",
-          c_my_pe, clup_offset, clup_size);
-    } else break;
+      size_t clup_offset = comp.offset();
+      size_t clup_size = comp.size();
+      if (clup_offset == mbuf->read && clup_size > 0) {
+        mbuf->release(clup_size);
+        addr_heap.pop();
+        PDEBUG("PE %d releasing message: offset %llu, size %llu\n",
+            c_my_pe, clup_offset, clup_size);
+      } else break;
+    }
   }
 #endif // !NO_CLEANUP
 }
@@ -296,6 +353,7 @@ __device__ envelope* charm::create_envelope(msgtype type, size_t msg_size, size_
   return new (mbuf->addr(mbuf_off)) envelope(type, msg_size, c_my_pe);
 }
 
+// Single-threaded message send
 __device__ void charm::send_msg(envelope* env, size_t offset, size_t msg_size, int dst_pe) {
   // Create composite using offset and size of source buffer
   composite_t src_composite(offset, msg_size);

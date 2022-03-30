@@ -15,6 +15,10 @@
 struct composite_t {
   uint64_t data;
 
+  __device__ composite_t() {
+    data = 0;
+  }
+
   __device__ composite_t(uint64_t data_) {
     data = data_;
   }
