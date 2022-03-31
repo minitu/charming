@@ -138,19 +138,23 @@ __device__ void charm::comm::init() {
 
 __device__ void charm::comm::process_local() {
   composite_t src_composite;
-  void* addr;
+  void* addr = nullptr;
+  size_t src_offset;
+  size_t msg_size;
 
   // Check local composite queue
   if (threadIdx.x == 0) {
     if (recv_local_comp->count > 0) {
       uint64_t data = *(recv_local_comp->addr(recv_local_comp->read));
       src_composite = composite_t(data);
-      size_t src_offset = src_composite.offset();
-      size_t msg_size = src_composite.size();
+      src_offset = src_composite.offset();
+      msg_size = src_composite.size();
       addr = mbuf->addr(src_offset);
       s_mem[1] = (uint64_t)addr; // Store in shared memory for other threads
       PDEBUG("PE %d receiving local message: offset %llu, size %llu\n",
           c_my_pe, src_offset, msg_size);
+    } else {
+      s_mem[1] = (uint64_t)nullptr;
     }
   }
   __syncthreads();
@@ -158,28 +162,31 @@ __device__ void charm::comm::process_local() {
     addr = (void*)s_mem[1]; // Fetch message address from shared memory
   }
 
-  // Process message in parallel
-  msgtype type = process_msg(addr, nullptr, begin_term_flag, do_term_flag);
+  if (addr) { // Check if we have a message
+    // Process message in parallel
+    msgtype type = process_msg(addr, nullptr, begin_term_flag, do_term_flag);
 
-  if (threadIdx.x == 0) {
-    // Release composite from local queue
-    recv_local_comp->release();
+    // Message cleanup
+    if (threadIdx.x == 0) {
+      // Release composite from local queue
+      recv_local_comp->release();
 
 #ifndef NO_CLEANUP
-    if (type != msgtype::user) {
-      // Store composite to be cleared from memory
-      addr_heap.push(src_composite);
-      PDEBUG("PE %d flagging local message for cleanup: offset %llu, "
-          "size %llu\n", c_my_pe, src_offset, msg_size);
-    }
+      if (type != msgtype::user) {
+        // Store composite to be cleared from memory
+        addr_heap.push(src_composite);
+        PDEBUG("PE %d flagging local message for cleanup: offset %llu, "
+            "size %llu\n", c_my_pe, src_offset, msg_size);
+      }
 #endif // !NO_CLEANUP
+    }
+    __syncthreads();
   }
-  __syncthreads();
 }
 
 __device__ void charm::comm::process_remote() {
-  size_t count;
-  void* dst_addr;
+  size_t count = 0;
+  void* dst_addr = nullptr;
 
   // Check if there are any message requests
   if (threadIdx.x == 0) {
@@ -273,7 +280,7 @@ __device__ void charm::comm::process_remote() {
 
 __device__ void charm::comm::cleanup() {
 #ifndef NO_CLEANUP
-  size_t count;
+  size_t count = 0;
 
   // Check for messages that have been delivered to the destination PE
   if (threadIdx.x == 0) {
