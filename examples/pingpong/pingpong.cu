@@ -106,6 +106,12 @@ __device__ void Comm::send() {
 }
 
 __device__ void Comm::recv(void* arg) {
+  __shared__ bool end;
+  if (threadIdx.x == 0) {
+    end = false;
+  }
+  __syncthreads();
+
   if (threadIdx.x == 0) {
     if (index == 0) {
 #ifdef DEBUG
@@ -119,7 +125,7 @@ __device__ void Comm::recv(void* arg) {
         iter = 0;
         if (cur_size > max_size) {
           charm::end();
-          return;
+          end = true;
         }
       }
     } else {
@@ -130,19 +136,26 @@ __device__ void Comm::recv(void* arg) {
   }
   __syncthreads();
 
+  if (end) return;
+
   send();
 }
 
 // Main
 __device__ void charm::main(int argc, char** argv, size_t* argvs) {
+  __shared__ bool end;
   constexpr int n_params = 4;
   size_t params[n_params] = {1, 65536, 100, 10};
+
+  if (threadIdx.x == 0) {
+    end = false;
+  }
+  __syncthreads();
 
   if (threadIdx.x == 0) {
     if (charm::n_pes() != 2) {
       printf("Need exactly 2 PEs!\n");
       charm::end();
-      return;
     }
 
     // Process command line arguments
@@ -156,6 +169,8 @@ __device__ void charm::main(int argc, char** argv, size_t* argvs) {
     printf("Iterations: %d (Warmup: %d)\n", (int)params[2], (int)params[3]);
   }
   __syncthreads();
+
+  if (end) return;
 
   Comm comm;
   comm_proxy->create(comm, 2);
