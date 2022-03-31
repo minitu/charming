@@ -40,57 +40,67 @@ __device__ void Comm::init(void* arg) {
 }
 
 __device__ void Comm::init_done(void* arg) {
-  if (threadIdx.x == 0) {
-    if (++init_cnt == 2) {
+  if (++init_cnt == 2) {
+    if (threadIdx.x == 0) {
       printf("Init done\n");
-
-      send();
     }
+
+    send();
   }
 }
 
 __device__ void Comm::send() {
   if (index == 0) {
     // Start iteration, only measure time on chare 0
-    if (iter == warmup) {
-      start_tp = cuda::std::chrono::system_clock::now();
-    }
+    if (threadIdx.x == 0) {
+      if (iter == warmup) {
+        start_tp = cuda::std::chrono::system_clock::now();
+      }
 #ifdef DEBUG
-    printf("Index %d iter %d sending size %lu\n", index, iter, cur_size);
+      printf("Index %d iter %d sending size %lu\n", index, iter, cur_size);
 #endif
 #ifdef MEASURE_INVOKE
-    if (iter >= warmup) {
-      invoke_start_tp = cuda::std::chrono::system_clock::now();
-    }
+      if (iter >= warmup) {
+        invoke_start_tp = cuda::std::chrono::system_clock::now();
+      }
 #endif
+    }
 #ifdef USER_MSG
     comm_proxy->invoke(peer, 2, msg, cur_size);
 #else
     comm_proxy->invoke(peer, 2, data, cur_size);
 #endif
+    __syncthreads();
 #ifdef MEASURE_INVOKE
-    if (iter >= warmup) {
-      invoke_end_tp = cuda::std::chrono::system_clock::now();
-    }
-    cuda::std::chrono::duration<double> diff = invoke_end_tp - invoke_start_tp;
-    invoke_time += diff.count();
-    if (iter == n_iters + warmup - 1) {
-      printf("Time per invoke: %.3lf us\n", invoke_time / n_iters * 1000000);
+    if (threadIdx.x == 0) {
+      if (iter >= warmup) {
+        invoke_end_tp = cuda::std::chrono::system_clock::now();
+      }
+      cuda::std::chrono::duration<double> diff = invoke_end_tp - invoke_start_tp;
+      invoke_time += diff.count();
+      if (iter == n_iters + warmup - 1) {
+        printf("Time per invoke: %.3lf us\n", invoke_time / n_iters * 1000000);
+      }
     }
 #endif
   } else {
     // End iteration
 #ifdef DEBUG
-    printf("Index %d iter %d sending size %lu\n", index, iter, cur_size);
+    if (threadIdx.x == 0) {
+      printf("Index %d iter %d sending size %lu\n", index, iter, cur_size);
+    }
 #endif
 #ifdef USER_MSG
     comm_proxy->invoke(peer, 2, msg, cur_size);
 #else
     comm_proxy->invoke(peer, 2, data, cur_size);
 #endif
-    if (++iter == n_iters + warmup) {
-      cur_size *= 2;
-      iter = 0;
+    __syncthreads();
+    if (threadIdx.x == 0) {
+      if (++iter == n_iters + warmup) {
+        cur_size *= 2;
+        iter = 0;
+      }
     }
   }
 }
@@ -117,8 +127,10 @@ __device__ void Comm::recv(void* arg) {
       printf("Index %d iter %d received size %lu\n", index, iter, cur_size);
 #endif
     }
-    send();
   }
+  __syncthreads();
+
+  send();
 }
 
 // Main
@@ -149,8 +161,6 @@ __device__ void charm::main(int argc, char** argv, size_t* argvs) {
   comm_proxy->create(comm, 2);
   __syncthreads();
 
-  if (threadIdx.x == 0) {
-    comm_proxy->invoke_all(0, params, sizeof(size_t) * n_params);
-  }
+  comm_proxy->invoke_all(0, params, sizeof(size_t) * n_params);
   __syncthreads();
 }

@@ -404,40 +404,50 @@ __device__ void charm::send_msg(envelope* env, size_t offset, size_t msg_size, i
 
 __device__ void charm::send_reg_msg(int chare_id, int chare_idx, int ep_id,
     void* buf, size_t payload_size, int dst_pe) {
-  size_t msg_size = envelope::alloc_size(sizeof(regular_msg) + payload_size);
+  size_t msg_size;
   size_t offset;
-  envelope* env = create_envelope(msgtype::regular, msg_size, &offset);
+  envelope* env;
 
-  regular_msg* msg = new ((char*)env + sizeof(envelope)) regular_msg(chare_id,
+  if (threadIdx.x == 0) {
+    msg_size = envelope::alloc_size(sizeof(regular_msg) + payload_size);
+    env = create_envelope(msgtype::regular, msg_size, &offset);
+
+    regular_msg* msg = new ((char*)env + sizeof(envelope)) regular_msg(chare_id,
       chare_idx, ep_id);
 
-  // Fill in payload (from regular GPU memory to NVSHMEM symmetric memory)
-  if (payload_size > 0) {
-    memcpy((char*)msg + sizeof(regular_msg), buf, payload_size);
-  }
+    // Fill in payload (from regular GPU memory to NVSHMEM symmetric memory)
+    if (payload_size > 0) {
+      // TODO: Implement memcpy kernel
+      memcpy((char*)msg + sizeof(regular_msg), buf, payload_size);
+    }
 
-  send_msg(env, offset, msg_size, dst_pe);
+    send_msg(env, offset, msg_size, dst_pe);
+  }
 }
 
 __device__ void charm::send_user_msg(int chare_id, int chare_idx, int ep_id,
     const message& msg, int dst_pe) {
-  // Set regular message fields using placement new
-  envelope* env = msg.env;
-  new ((char*)env + sizeof(envelope)) regular_msg(chare_id, chare_idx, ep_id);
+  if (threadIdx.x == 0) {
+    // Set regular message fields using placement new
+    envelope* env = msg.env;
+    new ((char*)env + sizeof(envelope)) regular_msg(chare_id, chare_idx, ep_id);
 
-  send_msg(env, msg.offset, env->size, dst_pe);
+    send_msg(env, msg.offset, env->size, dst_pe);
+  }
 }
 
 __device__ void charm::send_user_msg(int chare_id, int chare_idx, int ep_id,
     const message& msg, size_t payload_size, int dst_pe) {
-  // Set regular message fields using placement new
-  envelope* env = msg.env;
-  new ((char*)env + sizeof(envelope)) regular_msg(chare_id, chare_idx, ep_id);
+  if (threadIdx.x == 0) {
+    // Set regular message fields using placement new
+    envelope* env = msg.env;
+    new ((char*)env + sizeof(envelope)) regular_msg(chare_id, chare_idx, ep_id);
 
-  // Message size can be smaller than allocated
-  size_t msg_size = envelope::alloc_size(sizeof(regular_msg) + payload_size);
+    // Message size can be smaller than allocated
+    size_t msg_size = envelope::alloc_size(sizeof(regular_msg) + payload_size);
 
-  send_msg(env, msg.offset, msg_size, dst_pe);
+    send_msg(env, msg.offset, msg_size, dst_pe);
+  }
 }
 
 __device__ void charm::send_begin_term_msg(int dst_pe) {
