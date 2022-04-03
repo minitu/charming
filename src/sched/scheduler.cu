@@ -111,16 +111,19 @@ __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
       // Register user chares and entry methods on all PEs
       chare_proxy_cnt = 0;
       register_chares();
+      nvshmem_barrier_all();
     }
     __syncthreads();
-    nvshmem_barrier_all();
 
     if (c_my_pe == 0) {
       // Execute user's main function
       main(argc, argv, argvs);
+      __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+      nvshmem_barrier_all();
     }
     __syncthreads();
-    //nvshmem_barrier_all();
 
     // Loop until termination
     do {

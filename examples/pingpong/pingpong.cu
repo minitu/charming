@@ -149,12 +149,10 @@ __device__ void charm::main(int argc, char** argv, size_t* argvs) {
 
   if (threadIdx.x == 0) {
     end = false;
-  }
-  __syncthreads();
 
-  if (threadIdx.x == 0) {
     if (charm::n_pes() != 2) {
       printf("Need exactly 2 PEs!\n");
+      end = true;
       charm::end();
     }
 
