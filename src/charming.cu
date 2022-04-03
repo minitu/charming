@@ -99,7 +99,7 @@ int main(int argc, char* argv[]) {
 
   // Change device limits
   size_t stack_size, heap_size;
-  size_t smem_size = 1024;
+  size_t smem_size = SMEM_CNT_MAX * sizeof(uint64_t) + 128;
   constexpr size_t new_stack_size = 16384;
   cudaDeviceSetLimit(cudaLimitStackSize, new_stack_size);
   cudaDeviceGetLimit(&stack_size, cudaLimitStackSize);

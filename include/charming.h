@@ -13,6 +13,10 @@
 #define PDEBUG(...) do {} while (0)
 #endif
 
+// Max number of 64-bit values in shared memory
+// Used to coordinate fork-join model in scheduler
+#define SMEM_CNT_MAX 128
+
 namespace charm {
 
 // User functions required by the runtime

@@ -102,7 +102,7 @@ __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
   if (blockIdx.x == 0) {
     // Communication module resides in shared memory
     // 32 bytes from start of shared memory for alignment
-    comm* c = (comm*)(s_mem+4);
+    comm* c = (comm*)(s_mem+SMEM_CNT_MAX);
 
     if (threadIdx.x == 0) {
       // Initialize comm module
