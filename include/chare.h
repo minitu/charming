@@ -4,8 +4,11 @@
 #include <nvshmem.h>
 #include <nvfunctional>
 #include "message.h"
+#include "kernel.h"
 
 extern __shared__ uint64_t s_mem[];
+extern __constant__ int c_my_pe;
+extern __constant__ int c_n_pes;;
 
 namespace charm {
 
@@ -107,9 +110,9 @@ struct chare_proxy : chare_proxy_base {
         s_mem[0] = (uint64_t)loc_map;
         s_mem[1] = (uint64_t)map_ptr;
         s_mem[2] = (uint64_t)(sizeof(int) * n_total);
-        memcpy(loc_map, map_ptr, sizeof(int) * n_total);
       }
       __syncthreads();
+      memcpy_kernel((void*)s_mem[0], (void*)s_mem[1], (size_t)s_mem[2]);
     }
   }
 
@@ -117,8 +120,8 @@ struct chare_proxy : chare_proxy_base {
   // FIXME: Currently only block mapping
   __device__ void create(C& obj, int n) {
     // Divide the chares across all PEs
-    int n_pes = nvshmem_n_pes();
-    int my_pe = nvshmem_my_pe();
+    int n_pes = c_n_pes;
+    int my_pe = c_my_pe;
     int n_per_pe = n / n_pes;
     int rem = n % n_pes;
 
@@ -188,10 +191,9 @@ struct chare_proxy : chare_proxy_base {
           s_mem[0] = (uint64_t)tmp;
           s_mem[1] = (uint64_t)loc_map;
           s_mem[2] = (uint64_t)map_size;
-          // TODO: Implement a memcpy kernel
-          memcpy(tmp, loc_map, map_size);
         }
         __syncthreads();
+        memcpy_kernel((void*)s_mem[0], (void*)s_mem[1], (size_t)s_mem[2]);
 
         if (threadIdx.x == 0) {
           tmp += map_size;

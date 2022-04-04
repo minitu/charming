@@ -34,9 +34,10 @@ __device__ void Comm::init(void* arg) {
     invoke_time = 0;
 #endif
     printf("Chare %d init\n", index);
-
-    comm_proxy->invoke(0, 1);
   }
+  __syncthreads();
+
+  comm_proxy->invoke(0, 1);
 }
 
 __device__ void Comm::init_done(void* arg) {

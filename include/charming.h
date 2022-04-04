@@ -36,4 +36,4 @@ __device__ int device_atoi(const char* str, int strlen);
 
 }
 
-#endif
+#endif // _CHARMING_H_

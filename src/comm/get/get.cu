@@ -3,6 +3,7 @@
 #include <nvshmemx.h>
 
 #include "charming.h"
+#include "kernel.h"
 #include "message.h"
 #include "comm.h"
 #include "scheduler.h"
@@ -271,10 +272,7 @@ __device__ void charm::comm::process_remote() {
     }
 
     // Reset indices array for next use
-    // TODO: Implement memset kernel
-    if (threadIdx.x == 0) {
-      memset(recv_remote_comp_idx, 0, REMOTE_MSG_COUNT_MAX * c_n_pes * sizeof(size_t));
-    }
+    memset_kernel(recv_remote_comp_idx, 0, REMOTE_MSG_COUNT_MAX * c_n_pes * sizeof(size_t));
   }
 }
 
@@ -312,8 +310,7 @@ __device__ void charm::comm::cleanup() {
       }
 
       // Reset indices array for next use
-      // TODO: Implement memset kernel
-      memset(send_status_idx, 0, REMOTE_MSG_COUNT_MAX * c_n_pes * sizeof(size_t));
+      memset_kernel(send_status_idx, 0, REMOTE_MSG_COUNT_MAX * c_n_pes * sizeof(size_t));
     }
     __syncthreads();
   }
@@ -415,14 +412,23 @@ __device__ void charm::send_reg_msg(int chare_id, int chare_idx, int ep_id,
     regular_msg* msg = new ((char*)env + sizeof(envelope)) regular_msg(chare_id,
       chare_idx, ep_id);
 
-    // Fill in payload (from regular GPU memory to NVSHMEM symmetric memory)
     if (payload_size > 0) {
-      // TODO: Implement memcpy kernel
-      memcpy((char*)msg + sizeof(regular_msg), buf, payload_size);
+      s_mem[0] = (uint64_t)((char*)msg + sizeof(regular_msg));
+      s_mem[1] = (uint64_t)buf;
+      s_mem[2] = (uint64_t)payload_size;
     }
+  }
+  __syncthreads();
 
+  // Fill in payload (from regular GPU memory to NVSHMEM symmetric memory)
+  if (payload_size > 0) {
+    memcpy_kernel((void*)s_mem[0], (void*)s_mem[1], (size_t)s_mem[2]);
+  }
+
+  if (threadIdx.x == 0) {
     send_msg(env, offset, msg_size, dst_pe);
   }
+  __syncthreads();
 }
 
 __device__ void charm::send_user_msg(int chare_id, int chare_idx, int ep_id,
@@ -434,6 +440,7 @@ __device__ void charm::send_user_msg(int chare_id, int chare_idx, int ep_id,
 
     send_msg(env, msg.offset, env->size, dst_pe);
   }
+  __syncthreads();
 }
 
 __device__ void charm::send_user_msg(int chare_id, int chare_idx, int ep_id,
@@ -448,6 +455,7 @@ __device__ void charm::send_user_msg(int chare_id, int chare_idx, int ep_id,
 
     send_msg(env, msg.offset, msg_size, dst_pe);
   }
+  __syncthreads();
 }
 
 __device__ void charm::send_begin_term_msg(int dst_pe) {
