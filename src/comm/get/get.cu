@@ -246,18 +246,17 @@ __device__ void charm::comm::process_remote() {
 
       if (threadIdx.x == 0) {
         // Clear message request
+        // FIXME: Need fence after?
         nvshmemx_signal_op(recv_remote_comp + REMOTE_MSG_COUNT_MAX * src_pe + msg_idx,
             SIGNAL_FREE, NVSHMEM_SIGNAL_SET, c_my_pe);
 
 #ifndef NO_CLEANUP
-        if (type != msgtype::user) {
-          // Store composite to be cleared from memory
-          composite_t dst_composite(dst_offset, msg_size);
-          addr_heap.push(dst_composite);
-          PDEBUG("PE %d flagging received message for cleanup: offset %llu, "
-              "size %llu, src PE %d, idx %llu\n", c_my_pe, dst_composite.offset(),
-              dst_composite.size(), src_pe, msg_idx);
-        }
+        // Store composite to be cleared from memory
+        composite_t dst_composite(dst_offset, msg_size);
+        addr_heap.push(dst_composite);
+        PDEBUG("PE %d flagging received message for cleanup: offset %llu, "
+            "size %llu, src PE %d, idx %llu\n", c_my_pe, dst_composite.offset(),
+            dst_composite.size(), src_pe, msg_idx);
 
         // Notify sender that message is ready for cleanup
         int signal = (type == msgtype::user) ? SIGNAL_FREE : SIGNAL_CLUP;
@@ -340,7 +339,12 @@ __device__ void charm::message::alloc(size_t size) {
 }
 
 __device__ void charm::message::free() {
-  // TODO
+  /* TODO: Address heap needs to be accessible from the sender as well
+  composite_t src_composite(offset, env->size);
+  addr_heap.push(src_composite);
+  PDEBUG("PE %d flagging user message for cleanup: offset %llu, size %llu\n",
+      src_composite.offset(), src_composite.size());
+  */
 }
 
 __device__ envelope* charm::create_envelope(msgtype type, size_t msg_size, size_t* offset) {
