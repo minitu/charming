@@ -9,8 +9,8 @@
 
 namespace charm {
 
-void comm_init_host(int n_pes);
-void comm_fini_host(int n_pes);
+void comm_init_host(int n_pes, int n_sms);
+void comm_fini_host(int n_pes, int n_sms);
 
 struct alignas(ALIGN_SIZE) comm {
 #if CHARMING_COMM_TYPE == 0

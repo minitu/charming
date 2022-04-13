@@ -20,14 +20,22 @@ using namespace charm;
 
 cudaStream_t stream;
 
-__constant__ int c_my_pe;
+// GPU constant memory
+__constant__ int c_n_sms;
+__constant__ int c_my_dev;
+__constant__ int c_my_dev_node;
+__constant__ int c_n_devs;
+__constant__ int c_n_devs_node;
 __constant__ int c_n_pes;
-__constant__ int c_my_pe_node;
 __constant__ int c_n_pes_node;
 __constant__ int c_n_nodes;
 
+// GPU global memory
 __device__ chare_proxy_base* chare_proxies[CHARE_TYPE_CNT_MAX];
 __device__ int chare_proxy_cnt;
+
+// GPU shared memory
+extern __shared__ uint64_t s_mem[];
 
 int main(int argc, char* argv[]) {
 #ifdef CHARMING_USE_MPI
@@ -46,23 +54,30 @@ int main(int argc, char* argv[]) {
 #else
   nvshmem_init();
 #endif // CHARMING_USE_MPI
-  int h_my_pe = nvshmem_my_pe();
-  int h_n_pes = nvshmem_n_pes();
-  int h_my_pe_node = nvshmem_team_my_pe(NVSHMEMX_TEAM_NODE);
-  int h_n_pes_node = nvshmem_team_n_pes(NVSHMEMX_TEAM_NODE);
-  int h_n_nodes = h_n_pes / h_n_pes_node;
+  cudaDeviceProp prop;
+  cudaGetDeviceProperties(&prop, 0);
+  int h_n_sms = prop.multiProcessorCount;
+  int max_threads_tb = prop.maxThreadsPerBlock;
+
+  int h_my_dev = nvshmem_my_pe();
+  int h_my_dev_node = nvshmem_team_my_pe(NVSHMEMX_TEAM_NODE);
+  int h_n_devs = nvshmem_n_pes();
+  int h_n_devs_node = nvshmem_team_n_pes(NVSHMEMX_TEAM_NODE);
+  int h_n_pes = h_n_devs * h_n_sms;
+  int h_n_pes_node = h_n_devs_node * h_n_sms;
+  int h_n_nodes = h_n_devs / h_n_devs_node;
 
   // Initialize CUDA and create stream
   // Round-robin mapping of processes to GPUs
   int n_devices = 0;
   cudaGetDeviceCount(&n_devices);
   if (n_devices <= 0) {
-    if (h_my_pe == 0) {
+    if (h_my_dev == 0) {
       PERROR("Need at least 1 GPU but detected %d GPUs\n", n_devices);
     }
     return -1;
   }
-  cudaSetDevice(h_my_pe_node % n_devices);
+  cudaSetDevice(h_my_dev_node % n_devices);
   cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
   cuda_check_error();
 
@@ -90,9 +105,12 @@ int main(int argc, char* argv[]) {
   cudaMemcpyAsync(d_argv, h_argv, sizeof(char*) * argc, cudaMemcpyHostToDevice, stream);
 
   // Transfer constants
-  cudaMemcpyToSymbolAsync(c_my_pe, &h_my_pe, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(c_n_sms, &h_n_sms, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(c_my_dev, &h_my_dev, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(c_my_dev_node, &h_my_dev_node, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(c_n_devs, &h_n_devs, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(c_n_devs_node, &h_n_devs_node, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(c_n_pes, &h_n_pes, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(c_my_pe_node, &h_my_pe_node, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(c_n_pes_node, &h_n_pes_node, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(c_n_nodes, &h_n_nodes, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
   cuda_check_error();
@@ -108,18 +126,14 @@ int main(int argc, char* argv[]) {
   cudaDeviceGetLimit(&heap_size, cudaLimitMallocHeapSize);
 
   // Print configuration and launch scheduler
-  cudaDeviceProp prop;
-  cudaGetDeviceProperties(&prop, 0);
-  int max_blocks_sm;
-  int n_sms = prop.multiProcessorCount;
-  int max_threads_tb = prop.maxThreadsPerBlock;
-  dim3 grid_dim = dim3(n_sms);
+  dim3 grid_dim = dim3(h_n_sms);
   //dim3 block_dim = dim3(max_threads_tb);
   dim3 block_dim = dim3(512);
+  int max_blocks_sm;
   cudaOccupancyMaxActiveBlocksPerMultiprocessor(&max_blocks_sm, (const void*)scheduler,
       block_dim.x*block_dim.y*block_dim.z, 0);
   cuda_check_error();
-  if (h_my_pe == 0) {
+  if (h_my_dev == 0) {
     PINFO("Initiating CharminG\n");
     PINFO("PEs: %d, Nodes: %d\n", h_n_pes, h_n_nodes);
     PINFO("Thread grid: %d x %d x %d, Thread block: %d x %d x %d\n",
@@ -127,11 +141,11 @@ int main(int argc, char* argv[]) {
     PINFO("Stack size: %llu Bytes, Heap size: %llu Bytes\n", stack_size, heap_size);
     PINFO("Shared memory size: %llu Bytes, Clock rate: %.2lf GHz\n",
         smem_size, (double)prop.clockRate / 1e6);
-    PINFO("Max active TBs per SM: %d, Number of SMs: %d\n", max_blocks_sm, n_sms);
+    PINFO("Max active TBs per SM: %d, Number of SMs: %d\n", max_blocks_sm, h_n_sms);
   }
 
   // Initialize communication module
-  comm_init_host(h_n_pes);
+  comm_init_host(h_n_pes, h_n_sms);
   nvshmemx_barrier_all_on_stream(stream);
 
   // Launch scheduler kernel
@@ -142,7 +156,7 @@ int main(int argc, char* argv[]) {
   nvshmemx_barrier_all_on_stream(stream);
 
   // Cleanup
-  comm_fini_host(h_n_pes);
+  comm_fini_host(h_n_pes, h_n_sms);
   cudaStreamDestroy(stream);
   nvshmem_finalize();
 #ifdef CHARMING_USE_MPI
@@ -157,9 +171,9 @@ __device__ void charm::end() {
   send_begin_term_msg(0);
 }
 
-__device__ int charm::my_pe() { return c_my_pe; }
+__device__ int charm::my_pe() { return s_mem[3]; }
 __device__ int charm::n_pes() { return c_n_pes; }
-__device__ int charm::my_pe_node() { return c_my_pe_node; }
+__device__ int charm::my_pe_node() { return s_mem[4]; }
 __device__ int charm::n_pes_node() { return c_n_pes_node; }
 __device__ int charm::n_nodes() { return c_n_nodes; }
 

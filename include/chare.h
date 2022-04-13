@@ -6,9 +6,9 @@
 #include "message.h"
 #include "kernel.h"
 
+extern __constant__ int c_n_pes;
+
 extern __shared__ uint64_t s_mem[];
-extern __constant__ int c_my_pe;
-extern __constant__ int c_n_pes;;
 
 namespace charm {
 
@@ -121,7 +121,7 @@ struct chare_proxy : chare_proxy_base {
   __device__ void create(C& obj, int n) {
     // Divide the chares across all PEs
     int n_pes = c_n_pes;
-    int my_pe = c_my_pe;
+    int my_pe = s_mem[3];
     int n_per_pe = n / n_pes;
     int rem = n % n_pes;
 
@@ -154,6 +154,7 @@ struct chare_proxy : chare_proxy_base {
     }
 
     // Create chares
+    // FIXME: Code duplication with above
     n_this = -1;
     start_idx_ = 0;
     end_idx_ = 0;

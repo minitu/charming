@@ -144,19 +144,10 @@ __device__ void Comm::recv(void* arg) {
 
 // Main
 __device__ void charm::main(int argc, char** argv, size_t* argvs) {
-  __shared__ bool end;
   constexpr int n_params = 4;
   size_t params[n_params] = {1, 65536, 100, 10};
 
   if (threadIdx.x == 0) {
-    end = false;
-
-    if (charm::n_pes() != 2) {
-      printf("Need exactly 2 PEs!\n");
-      end = true;
-      charm::end();
-    }
-
     // Process command line arguments
     if (argc >= 2) params[0] = charm::device_atoi(argv[1], argvs[1]);
     if (argc >= 3) params[1] = charm::device_atoi(argv[2], argvs[2]);
@@ -168,8 +159,6 @@ __device__ void charm::main(int argc, char** argv, size_t* argvs) {
     printf("Iterations: %d (Warmup: %d)\n", (int)params[2], (int)params[3]);
   }
   __syncthreads();
-
-  if (end) return;
 
   Comm comm;
   comm_proxy->create(comm, 2);
