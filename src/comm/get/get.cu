@@ -31,32 +31,20 @@ extern __constant__ int c_n_pes;
 extern __constant__ int c_n_pes_node;
 extern __constant__ int c_n_nodes;
 
-// GPU global memory
-__device__ ringbuf_t* mbuf;
-__device__ size_t mbuf_size;
-__device__ uint64_t* send_status;
-__device__ uint64_t* recv_remote_comp;
-__device__ compbuf_t* recv_local_comp;
-__device__ uint64_t* send_comp;
-__device__ size_t* send_status_idx;
-__device__ size_t* recv_remote_comp_idx;
-__device__ composite_t* heap_buf;
-__device__ size_t heap_buf_size;
+// Managed memory (actual data may reside in GPU global memory)
+__device__ __managed__ ringbuf_t* mbuf; // Managed
+__device__ __managed__ size_t mbuf_size;
+__device__ __managed__ uint64_t* send_status; // NVSHMEM
+__device__ __managed__ uint64_t* recv_remote_comp; // NVSHMEM
+__device__ __managed__ compbuf_t* recv_local_comp; // Managed
+__device__ __managed__ uint64_t* send_comp; // Global
+__device__ __managed__ size_t* send_status_idx; // Global
+__device__ __managed__ size_t* recv_remote_comp_idx; // Global
+__device__ __managed__ composite_t* heap_buf; // Global
+__device__ __managed__ size_t heap_buf_size;
 
 // GPU shared memory
 extern __shared__ uint64_t s_mem[];
-
-// Host memory
-uint64_t* h_send_status;
-uint64_t* h_recv_remote_comp;
-uint64_t* h_send_comp;
-uint64_t* h_send_status_idx;
-uint64_t* h_recv_remote_comp_idx;
-composite_t* h_heap_buf;
-ringbuf_t* h_mbuf;
-ringbuf_t* h_mbuf_d;
-compbuf_t* h_recv_local_comp;
-compbuf_t* h_recv_local_comp_d;
 
 enum {
   SIGNAL_FREE = 0,
@@ -66,88 +54,76 @@ enum {
 
 void charm::comm_init_host(int n_pes, int n_sms) {
   // Allocate message buffer
-  size_t h_mbuf_size = 8388608; // TODO
-  cudaMallocHost(&h_mbuf, sizeof(ringbuf_t) * n_sms);
-  cudaMalloc(&h_mbuf_d, sizeof(ringbuf_t) * n_sms);
-  assert(h_mbuf && h_mbuf_d);
-  ringbuf_t* cur_mbuf = h_mbuf;
+  size_t mbuf_size = 8388608; // TODO
+  cudaMallocManaged(&mbuf, sizeof(ringbuf_t) * n_sms);
+  assert(mbuf);
+  ringbuf_t* cur_mbuf = mbuf;
   for (int i = 0; i < n_sms; i++) {
-    cur_mbuf->init(h_mbuf_size);
+    cur_mbuf->init(mbuf_size);
     cur_mbuf++;
   }
 
-  // Allocate data structures
-  size_t h_status_size = REMOTE_MSG_COUNT_MAX * n_pes * n_sms * sizeof(uint64_t);
-  h_send_status = (uint64_t*)nvshmem_malloc(h_status_size);
-  size_t h_remote_comp_size = h_status_size;
-  h_recv_remote_comp = (uint64_t*)nvshmem_malloc(h_remote_comp_size);
-  cudaMallocHost(&h_recv_local_comp, sizeof(compbuf_t) * n_sms);
-  cudaMalloc(&h_recv_local_comp_d, sizeof(compbuf_t) * n_sms);
-  assert(h_recv_local_comp && h_recv_local_comp_d);
-  compbuf_t* cur_comp = h_recv_local_comp;
+  // Allocate and prepare data structures
+  size_t status_size = REMOTE_MSG_COUNT_MAX * n_pes * n_sms * sizeof(uint64_t);
+  send_status = (uint64_t*)nvshmem_malloc(status_size);
+  assert(send_status);
+
+  size_t remote_comp_size = status_size;
+  recv_remote_comp = (uint64_t*)nvshmem_malloc(remote_comp_size);
+  assert(recv_remote_comp);
+
+  cudaMallocManaged(&recv_local_comp, sizeof(compbuf_t) * n_sms);
+  assert(recv_local_comp);
+  compbuf_t* cur_comp = recv_local_comp;
   for (int i = 0; i < n_sms; i++) {
     cur_comp->init(LOCAL_MSG_COUNT_MAX);
     cur_comp++;
   }
-  cudaMalloc(&h_send_comp, h_remote_comp_size);
-  size_t h_idx_size = REMOTE_MSG_COUNT_MAX * n_pes * n_sms * sizeof(size_t);
-  cudaMalloc(&h_send_status_idx, h_idx_size);
-  cudaMalloc(&h_recv_remote_comp_idx, h_idx_size);
-  size_t h_heap_buf_size = REMOTE_MSG_COUNT_MAX * n_pes * 2 * n_sms * sizeof(composite_t);
-  cudaMalloc(&h_heap_buf, h_heap_buf_size);
-  assert(h_send_status && h_recv_remote_comp && h_send_comp && h_send_status_idx
-      && h_recv_remote_comp_idx && h_heap_buf);
-  cuda_check_error();
 
-  // Prepare data structures
-  cudaMemcpyAsync(h_mbuf_d, h_mbuf, sizeof(ringbuf_t) * n_sms, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(mbuf, &h_mbuf_d, sizeof(ringbuf_t*), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(mbuf_size, &h_mbuf_size, sizeof(size_t), 0, cudaMemcpyHostToDevice, stream);
+  cudaMalloc(&send_comp, remote_comp_size);
+  assert(send_comp);
 
-  cudaMemcpyToSymbolAsync(send_status, &h_send_status, sizeof(uint64_t*), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(recv_remote_comp, &h_recv_remote_comp, sizeof(uint64_t*), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyAsync(h_recv_local_comp_d, h_recv_local_comp, sizeof(compbuf_t*), cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(recv_local_comp, &h_recv_local_comp_d, sizeof(compbuf_t*), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(send_comp, &h_send_comp, sizeof(uint64_t*), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(send_status_idx, &h_send_status_idx, sizeof(size_t*), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(recv_remote_comp_idx, &h_recv_remote_comp_idx, sizeof(size_t*), 0, cudaMemcpyHostToDevice, stream);
+  size_t idx_size = REMOTE_MSG_COUNT_MAX * n_pes * n_sms * sizeof(size_t);
+  cudaMalloc(&send_status_idx, idx_size);
+  cudaMalloc(&recv_remote_comp_idx, idx_size);
+  assert(send_status_idx && recv_remote_comp_idx);
 
-  cudaMemsetAsync(h_send_status, 0, h_status_size, stream);
-  cudaMemsetAsync(h_recv_remote_comp, 0, h_remote_comp_size, stream);
-  cudaMemsetAsync(h_send_comp, 0, h_remote_comp_size, stream);
-  cudaMemsetAsync(h_send_status_idx, 0, h_idx_size, stream);
-  cudaMemsetAsync(h_recv_remote_comp_idx, 0, h_idx_size, stream);
+  heap_buf_size = REMOTE_MSG_COUNT_MAX * n_pes * 2 * n_sms * sizeof(composite_t);
+  cudaMalloc(&heap_buf, heap_buf_size);
+  assert(heap_buf);
 
-  cudaMemcpyToSymbolAsync(heap_buf, &h_heap_buf, sizeof(composite_t*), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(heap_buf_size, &h_heap_buf_size, sizeof(size_t), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemsetAsync(h_heap_buf, 0, h_heap_buf_size, stream);
+  // Clear data structures
+  cudaMemsetAsync(send_status, 0, status_size, stream);
+  cudaMemsetAsync(recv_remote_comp, 0, remote_comp_size, stream);
+  cudaMemsetAsync(send_comp, 0, remote_comp_size, stream);
+  cudaMemsetAsync(send_status_idx, 0, idx_size, stream);
+  cudaMemsetAsync(recv_remote_comp_idx, 0, idx_size, stream);
+  cudaMemsetAsync(heap_buf, 0, heap_buf_size, stream);
   cuda_check_error();
 }
 
 void charm::comm_fini_host(int n_pes, int n_sms) {
-  cudaFree(h_send_comp);
-  cudaFree(h_send_status_idx);
-  cudaFree(h_recv_remote_comp_idx);
-  cudaFree(h_heap_buf);
+  cudaFree(send_comp);
+  cudaFree(send_status_idx);
+  cudaFree(recv_remote_comp_idx);
+  cudaFree(heap_buf);
 
-  compbuf_t* cur_comp = h_recv_local_comp;
+  compbuf_t* cur_comp = recv_local_comp;
   for (int i = 0; i < n_sms; i++) {
     cur_comp->fini();
     cur_comp++;
   }
-  cudaFreeHost(h_recv_local_comp);
-  cudaFree(h_recv_local_comp_d);
+  cudaFree(recv_local_comp);
 
-  nvshmem_free(h_send_status);
-  nvshmem_free(h_recv_remote_comp);
+  nvshmem_free(send_status);
+  nvshmem_free(recv_remote_comp);
 
-  ringbuf_t* cur_mbuf = h_mbuf;
+  ringbuf_t* cur_mbuf = mbuf;
   for (int i = 0; i < n_sms; i++) {
     cur_mbuf->fini();
     cur_mbuf++;
   }
-  cudaFreeHost(h_mbuf);
-  cudaFree(h_mbuf_d);
+  cudaFree(mbuf);
 }
 
 __device__ void charm::comm::init() {
