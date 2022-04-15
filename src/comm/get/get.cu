@@ -27,9 +27,9 @@ extern __constant__ int c_my_dev;
 extern __constant__ int c_my_dev_node;
 extern __constant__ int c_n_devs;
 extern __constant__ int c_n_devs_node;
+extern __constant__ int c_n_nodes;
 extern __constant__ int c_n_pes;
 extern __constant__ int c_n_pes_node;
-extern __constant__ int c_n_nodes;
 
 // Managed memory (actual data may reside in GPU global memory)
 __device__ __managed__ ringbuf_t* mbuf; // Managed
@@ -99,6 +99,8 @@ void charm::comm_init_host(int n_pes, int n_sms) {
   cudaMemsetAsync(send_status_idx, 0, idx_size, stream);
   cudaMemsetAsync(recv_remote_comp_idx, 0, idx_size, stream);
   cudaMemsetAsync(heap_buf, 0, heap_buf_size, stream);
+
+  cudaStreamSynchronize(stream);
   cuda_check_error();
 }
 

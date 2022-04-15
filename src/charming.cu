@@ -13,8 +13,6 @@
 #include "scheduler.h"
 #include "util.h"
 
-// Maximum number of chare types
-#define CHARE_TYPE_CNT_MAX 1024
 
 using namespace charm;
 
@@ -26,13 +24,12 @@ __constant__ int c_my_dev;
 __constant__ int c_my_dev_node;
 __constant__ int c_n_devs;
 __constant__ int c_n_devs_node;
+__constant__ int c_n_nodes;
 __constant__ int c_n_pes;
 __constant__ int c_n_pes_node;
-__constant__ int c_n_nodes;
 
 // GPU global memory
-__device__ chare_proxy_base* chare_proxies[CHARE_TYPE_CNT_MAX];
-__device__ int chare_proxy_cnt;
+__device__ __managed__ chare_proxy_table* proxy_tables;
 
 // GPU shared memory
 extern __shared__ uint64_t s_mem[];
@@ -63,9 +60,23 @@ int main(int argc, char* argv[]) {
   int h_my_dev_node = nvshmem_team_my_pe(NVSHMEMX_TEAM_NODE);
   int h_n_devs = nvshmem_n_pes();
   int h_n_devs_node = nvshmem_team_n_pes(NVSHMEMX_TEAM_NODE);
-  int h_n_pes = h_n_devs * h_n_sms;
-  int h_n_pes_node = h_n_devs_node * h_n_sms;
   int h_n_nodes = h_n_devs / h_n_devs_node;
+  int h_n_pes = h_n_devs * h_n_sms;
+  int h_n_pes_node = h_n_pes / h_n_nodes;
+
+  // Check for necessary CUDA functionalities
+  if (!prop.cooperativeLaunch) {
+    if (h_my_dev == 0) {
+      PERROR("Need support for CUDA Cooperative Groups");
+    }
+    return -1;
+  }
+  if (!prop.managedMemory) {
+    if (h_my_dev == 0) {
+      PERROR("Need support for CUDA Unified Memory");
+    }
+    return -1;
+  }
 
   // Initialize CUDA and create stream
   // Round-robin mapping of processes to GPUs
@@ -80,6 +91,12 @@ int main(int argc, char* argv[]) {
   cudaSetDevice(h_my_dev_node % n_devices);
   cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
   cuda_check_error();
+
+  // Create chare proxy tables
+  cudaMallocManaged(&proxy_tables, sizeof(chare_proxy_table) * h_n_sms);
+  for (int i = 0; i < h_n_sms; i++) {
+    new (&proxy_tables[i]) chare_proxy_table();
+  }
 
   // Transfer command line arguments to GPU
   char* m_args; // Contains the actual arguments consecutively
@@ -128,7 +145,7 @@ int main(int argc, char* argv[]) {
   //cudaDeviceSetLimit(cudaLimitMallocHeapSize, new_heap_size);
   cudaDeviceGetLimit(&heap_size, cudaLimitMallocHeapSize);
 
-  // Print configuration and launch scheduler
+  // Print configuration
   dim3 grid_dim = dim3(h_n_sms);
   //dim3 block_dim = dim3(max_threads_tb);
   dim3 block_dim = dim3(512);
@@ -138,7 +155,7 @@ int main(int argc, char* argv[]) {
   cuda_check_error();
   if (h_my_dev == 0) {
     PINFO("Initiating CharminG\n");
-    PINFO("PEs: %d, Nodes: %d\n", h_n_pes, h_n_nodes);
+    PINFO("PEs: %d, GPU Devices: %d, Nodes: %d\n", h_n_pes, h_n_devs, h_n_nodes);
     PINFO("Thread grid: %d x %d x %d, Thread block: %d x %d x %d\n",
         grid_dim.x, grid_dim.y, grid_dim.z, block_dim.x, block_dim.y, block_dim.z);
     PINFO("Stack size: %llu Bytes, Heap size: %llu Bytes\n", stack_size, heap_size);
@@ -155,18 +172,15 @@ int main(int argc, char* argv[]) {
   void* kargs[] = { &argc, &m_argv, &m_argvs };
   nvshmemx_collective_launch((const void*)scheduler, grid_dim, block_dim, kargs,
       smem_size, stream);
-  printf("After collective launch\n");
   cudaStreamSynchronize(stream);
   cuda_check_error();
   nvshmemx_barrier_all_on_stream(stream);
-  printf("After nvshmemx barrier\n");
 
   // Cleanup
   comm_fini_host(h_n_pes, h_n_sms);
+  cudaFree(proxy_tables);
   cudaStreamDestroy(stream);
-  printf("After cudaStreamDestroy\n");
   nvshmem_finalize();
-  printf("After nvshmemx_finalize\n");
 #ifdef CHARMING_USE_MPI
   MPI_Finalize();
 #endif

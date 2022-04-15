@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include "pingpong.h"
 
-__device__ charm::chare_proxy<Comm>* comm_proxy;
+__shared__ charm::chare_proxy<Comm>* comm_proxy;
 
 __device__ void charm::register_chares() {
   comm_proxy = new charm::chare_proxy<Comm>(3);

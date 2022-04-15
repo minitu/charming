@@ -6,8 +6,13 @@
 #include "message.h"
 #include "kernel.h"
 
+// Maximum number of chare types
+#define CHARE_TYPE_CNT_MAX 1024
+
+// GPU constant memory
 extern __constant__ int c_n_pes;
 
+// GPU shared memory
 extern __shared__ uint64_t s_mem[];
 
 namespace charm {
@@ -41,10 +46,17 @@ struct chare_proxy_base {
   __device__ virtual void call(int idx, int ep, void* arg) = 0;
 };
 
+struct chare_proxy_table {
+  chare_proxy_base* proxies[CHARE_TYPE_CNT_MAX];
+  int count;
+
+  chare_proxy_table() : count(0) {}
+};
+
 }; // namespace charm
 
-extern __device__ charm::chare_proxy_base* chare_proxies[];
-extern __device__ int chare_proxy_cnt;
+// GPU global memory
+extern __device__ __managed__ charm::chare_proxy_table* proxy_tables;
 
 namespace charm {
 
@@ -67,8 +79,10 @@ struct chare_proxy : chare_proxy_base {
     : objects(nullptr), n_local(0), n_total(0), start_idx(-1), end_idx(-1),
       loc_map(nullptr), entry_methods(nullptr), em_count(0) {
     // Store this proxy for the runtime
-    id = chare_proxy_cnt;
-    chare_proxies[chare_proxy_cnt++] = this;
+    chare_proxy_table& my_proxy_table = proxy_tables[blockIdx.x];
+    id = my_proxy_table.count++;
+    assert(id < CHARE_TYPE_CNT_MAX);
+    my_proxy_table.proxies[id] = this;
 
     // Allocate entry method table
     entry_methods = new entry_method<C>*[n_em];

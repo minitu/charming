@@ -2,8 +2,6 @@
 #include <nvshmemx.h>
 #include <cooperative_groups.h>
 
-namespace cg = cooperative_groups;
-
 #include "charming.h"
 #include "message.h"
 #include "comm.h"
@@ -11,6 +9,7 @@ namespace cg = cooperative_groups;
 #include "chare.h"
 #include "util.h"
 
+namespace cg = cooperative_groups;
 using namespace charm;
 
 // GPU constant memory
@@ -19,12 +18,12 @@ extern __constant__ int c_my_dev;
 extern __constant__ int c_my_dev_node;
 extern __constant__ int c_n_devs;
 extern __constant__ int c_n_devs_node;
+extern __constant__ int c_n_nodes;
 extern __constant__ int c_n_pes;
 extern __constant__ int c_n_pes_node;
-extern __constant__ int c_n_nodes;
 
 // GPU global memory
-extern __device__ chare_proxy_base* chare_proxies[];
+extern __device__ __managed__ chare_proxy_table* proxy_tables;
 
 // GPU shared memory
 extern __shared__ uint64_t s_mem[];
@@ -41,6 +40,7 @@ __device__ msgtype charm::process_msg(void* addr, ssize_t* processed_size,
   }
   __syncthreads();
 
+  chare_proxy_table& my_proxy_table = proxy_tables[blockIdx.x];
   if (type == msgtype::create) {
     // Creation message
     create_msg* msg = (create_msg*)((char*)env + sizeof(envelope));
@@ -50,7 +50,7 @@ __device__ msgtype charm::process_msg(void* addr, ssize_t* processed_size,
           msg->n_total, msg->start_idx, msg->end_idx);
     }
 
-    chare_proxy_base*& chare_proxy = chare_proxies[msg->chare_id];
+    chare_proxy_base*& chare_proxy = my_proxy_table.proxies[msg->chare_id];
     char* map_ptr = (char*)msg + sizeof(create_msg);
     char* obj_ptr = map_ptr + sizeof(int) * msg->n_total;
 
@@ -65,7 +65,7 @@ __device__ msgtype charm::process_msg(void* addr, ssize_t* processed_size,
           msg->chare_id, msg->chare_idx, msg->ep_id);
     }
 
-    chare_proxy_base*& chare_proxy = chare_proxies[msg->chare_id];
+    chare_proxy_base*& chare_proxy = my_proxy_table.proxies[msg->chare_id];
     void* payload = (char*)msg + sizeof(regular_msg);
 
     chare_proxy->call(msg->chare_idx, msg->ep_id, payload);
@@ -111,16 +111,14 @@ __device__ __forceinline__ void loop(comm* c) {
 }
 
 __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
-  // For inter-PE/TB synchronization
+  // For grid synchronization
   cg::grid_group grid = cg::this_grid();
 
   // Register user chares and entry methods
-  // TODO: This should be done by all PEs
-  int gid = blockDim.x * blockIdx.x + threadIdx.x;
-  if (gid == 0) {
-    chare_proxy_cnt = 0;
+  if (threadIdx.x == 0) {
     register_chares();
   }
+  __syncthreads();
 
   // Communication module resides in shared memory (one per PE/TB)
   comm* c = (comm*)(s_mem+SMEM_CNT_MAX);
@@ -135,6 +133,7 @@ __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
   __syncthreads();
 
   // Global synchronization
+  int gid = blockDim.x * blockIdx.x + threadIdx.x;
   if (gid == 0) {
     nvshmem_barrier_all();
   }
