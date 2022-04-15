@@ -160,10 +160,12 @@ __device__ void charm::main(int argc, char** argv, size_t* argvs) {
   }
   __syncthreads();
 
+  /*
   Comm comm;
   comm_proxy->create(comm, 2);
   __syncthreads();
 
   comm_proxy->invoke_all(0, params, sizeof(size_t) * n_params);
   __syncthreads();
+  */
 }

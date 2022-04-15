@@ -115,6 +115,7 @@ __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
   cg::grid_group grid = cg::this_grid();
 
   // Register user chares and entry methods
+  // TODO: This should be done by all PEs
   int gid = blockDim.x * blockIdx.x + threadIdx.x;
   if (gid == 0) {
     chare_proxy_cnt = 0;
@@ -151,10 +152,18 @@ __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
   }
   grid.sync();
 
+  /*
   // Loop until termination
   do {
     loop(c);
   } while (!c->do_term_flag);
+  */
+
+  // Global synchronization
+  if (gid == 0) {
+    nvshmem_barrier_all();
+  }
+  grid.sync();
 
   if (threadIdx.x == 0) {
     PDEBUG("PE %d terminating...\n", my_pe);

@@ -38,27 +38,27 @@ __device__ int chare_proxy_cnt;
 extern __shared__ uint64_t s_mem[];
 
 int main(int argc, char* argv[]) {
+  // Initialize NVSHMEM (and MPI if needed)
 #ifdef CHARMING_USE_MPI
-  // Initialize MPI
   MPI_Init(&argc, &argv);
   int world_size;
   int rank;
   MPI_Comm_size(MPI_COMM_WORLD, &world_size);
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
-  // Initialize NVSHMEM
   nvshmemx_init_attr_t attr;
   MPI_Comm comm = MPI_COMM_WORLD;
   attr.mpi_comm = &comm;
   nvshmemx_init_attr(NVSHMEMX_INIT_WITH_MPI_COMM, &attr);
 #else
   nvshmem_init();
-#endif // CHARMING_USE_MPI
+#endif
+
+  // Execution environment
   cudaDeviceProp prop;
   cudaGetDeviceProperties(&prop, 0);
-  int h_n_sms = prop.multiProcessorCount;
   int max_threads_tb = prop.maxThreadsPerBlock;
-
+  int h_n_sms = prop.multiProcessorCount;
   int h_my_dev = nvshmem_my_pe();
   int h_my_dev_node = nvshmem_team_my_pe(NVSHMEMX_TEAM_NODE);
   int h_n_devs = nvshmem_n_pes();
@@ -82,29 +82,32 @@ int main(int argc, char* argv[]) {
   cuda_check_error();
 
   // Transfer command line arguments to GPU
-  size_t h_argvs[argc];
-  size_t argvs_total = 0;
-  for (int i = 0; i < argc; i++) {
-    h_argvs[i] = strlen(argv[i]);
-    argvs_total += h_argvs[i] + 1; // Include NULL character
-  }
-  size_t* d_argvs;
-  cudaMalloc(&d_argvs, sizeof(size_t) * argc);
-  cudaMemcpyAsync(d_argvs, h_argvs, sizeof(size_t) * argc, cudaMemcpyHostToDevice, stream);
-  char* d_argvv;
-  cudaMalloc(&d_argvv, argvs_total);
-  char* h_argv[argc];
-  h_argv[0] = d_argvv;
-  cudaMemcpyAsync(h_argv[0], argv[0], h_argvs[0] + 1, cudaMemcpyHostToDevice, stream);
-  for (int i = 1; i < argc; i++) {
-    h_argv[i] = h_argv[i-1] + h_argvs[i-1] + 1;
-    cudaMemcpyAsync(h_argv[i], argv[i], h_argvs[i] + 1, cudaMemcpyHostToDevice, stream);
-  }
-  char** d_argv;
-  cudaMalloc(&d_argv, sizeof(char*) * argc);
-  cudaMemcpyAsync(d_argv, h_argv, sizeof(char*) * argc, cudaMemcpyHostToDevice, stream);
+  char* m_args; // Contains the actual arguments consecutively
+  char** m_argv; // Contains pointers to the arguments
+  size_t* m_argvs; // Contains sizes of the arguments
+  size_t argvs_total = 0; // Sum of all argument sizes
 
-  // Transfer constants
+  // Figure out size of each argument and total size
+  cudaMallocManaged(&m_argvs, sizeof(size_t) * argc);
+  for (int i = 0; i < argc; i++) {
+    m_argvs[i] = strlen(argv[i]);
+    argvs_total += m_argvs[i] + 1; // Include NULL character
+  }
+
+  // Allocate memory for actual arguments
+  cudaMallocManaged(&m_args, argvs_total);
+
+  // Copy arguments into managed memory and store their addresses
+  cudaMallocManaged(&m_argv, sizeof(char*) * argc);
+  char* cur_arg = m_args;
+  for (int i = 0; i < argc; i++) {
+    strcpy(cur_arg, argv[i]);
+    m_argv[i] = cur_arg;
+
+    cur_arg += m_argvs[i] + 1; // Include NULL character
+  }
+
+  // Transfer execution environment constants
   cudaMemcpyToSymbolAsync(c_n_sms, &h_n_sms, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(c_my_dev, &h_my_dev, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(c_my_dev_node, &h_my_dev_node, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
@@ -149,16 +152,21 @@ int main(int argc, char* argv[]) {
   nvshmemx_barrier_all_on_stream(stream);
 
   // Launch scheduler kernel
-  void* kargs[] = { &argc, &d_argv, &d_argvs };
-  nvshmemx_collective_launch((const void*)scheduler, grid_dim, block_dim, kargs, smem_size, stream);
+  void* kargs[] = { &argc, &m_argv, &m_argvs };
+  nvshmemx_collective_launch((const void*)scheduler, grid_dim, block_dim, kargs,
+      smem_size, stream);
+  printf("After collective launch\n");
   cudaStreamSynchronize(stream);
   cuda_check_error();
   nvshmemx_barrier_all_on_stream(stream);
+  printf("After nvshmemx barrier\n");
 
   // Cleanup
   comm_fini_host(h_n_pes, h_n_sms);
   cudaStreamDestroy(stream);
+  printf("After cudaStreamDestroy\n");
   nvshmem_finalize();
+  printf("After nvshmemx_finalize\n");
 #ifdef CHARMING_USE_MPI
   MPI_Finalize();
 #endif

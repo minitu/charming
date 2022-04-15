@@ -125,27 +125,29 @@ void charm::comm_init_host(int n_pes, int n_sms) {
 }
 
 void charm::comm_fini_host(int n_pes, int n_sms) {
-  nvshmem_free(h_send_status);
-  nvshmem_free(h_recv_remote_comp);
-
   cudaFree(h_send_comp);
   cudaFree(h_send_status_idx);
   cudaFree(h_recv_remote_comp_idx);
   cudaFree(h_heap_buf);
 
-  ringbuf_t* cur_mbuf = h_mbuf;
-  for (int i = 0; i < n_sms; i++) {
-    cur_mbuf->fini();
-  }
-  cudaFreeHost(h_mbuf);
-  cudaFree(h_mbuf_d);
-
   compbuf_t* cur_comp = h_recv_local_comp;
   for (int i = 0; i < n_sms; i++) {
     cur_comp->fini();
+    cur_comp++;
   }
   cudaFreeHost(h_recv_local_comp);
   cudaFree(h_recv_local_comp_d);
+
+  nvshmem_free(h_send_status);
+  nvshmem_free(h_recv_remote_comp);
+
+  ringbuf_t* cur_mbuf = h_mbuf;
+  for (int i = 0; i < n_sms; i++) {
+    cur_mbuf->fini();
+    cur_mbuf++;
+  }
+  cudaFreeHost(h_mbuf);
+  cudaFree(h_mbuf_d);
 }
 
 __device__ void charm::comm::init() {

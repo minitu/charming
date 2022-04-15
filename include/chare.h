@@ -167,9 +167,11 @@ struct chare_proxy : chare_proxy_base {
       end_idx_ = start_idx_ + n_this - 1;
 
       if (pe == my_pe) {
+        printf("!!! Creating local chare for PE %d\n", pe);
         // Create chares for this PE
         create_local(n_this, n, start_idx_, end_idx_, nullptr, &obj);
       } else {
+        printf("!!! Creating remote chare for PE %d\n", pe);
         char* tmp;
         envelope* env;
         size_t map_size;
@@ -201,7 +203,7 @@ struct chare_proxy : chare_proxy_base {
           obj.pack(tmp);
 
           // Send creation message to target PE
-          send_msg(env, offset, msg_size, pe);
+          //send_msg(env, offset, msg_size, pe);
         }
         __syncthreads();
       }
