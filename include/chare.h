@@ -96,10 +96,11 @@ struct chare_proxy : chare_proxy_base {
   // Create local chares
   __device__ virtual void create_local(int n_local_, int n_total_, int start_idx_,
       int end_idx_, void* map_ptr, void* obj_ptr) {
+    // Store information and create local chares
     if (threadIdx.x == 0) {
       n_local = n_local_;
       n_total = n_total_;
-      objects = new C*[n_local];
+      objects = n_local ? new C*[n_local] : nullptr;
       start_idx = start_idx_;
       end_idx = end_idx_;
 
@@ -114,13 +115,10 @@ struct chare_proxy : chare_proxy_base {
     }
     __syncthreads();
 
-    // Create location map for PEs other than PE 0
+    // On PEs other than 0, create location map using data from creation message
     if (map_ptr) {
       if (threadIdx.x == 0) {
         loc_map = new int[n_total];
-      }
-      __syncthreads();
-      if (threadIdx.x == 0) {
         s_mem[0] = (uint64_t)loc_map;
         s_mem[1] = (uint64_t)map_ptr;
         s_mem[2] = (uint64_t)(sizeof(int) * n_total);
@@ -181,11 +179,9 @@ struct chare_proxy : chare_proxy_base {
       end_idx_ = start_idx_ + n_this - 1;
 
       if (pe == my_pe) {
-        printf("!!! Creating local chare for PE %d\n", pe);
         // Create chares for this PE
         create_local(n_this, n, start_idx_, end_idx_, nullptr, &obj);
       } else {
-        printf("!!! Creating remote chare for PE %d\n", pe);
         char* tmp;
         envelope* env;
         size_t map_size;
@@ -217,7 +213,7 @@ struct chare_proxy : chare_proxy_base {
           obj.pack(tmp);
 
           // Send creation message to target PE
-          //send_msg(env, offset, msg_size, pe);
+          send_msg(env, offset, msg_size, pe);
         }
         __syncthreads();
       }

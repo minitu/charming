@@ -41,11 +41,15 @@ __device__ void Comm::init(void* arg) {
 }
 
 __device__ void Comm::init_done(void* arg) {
-  if (++init_cnt == 2) {
+  if (threadIdx.x == 0) {
+    init_cnt++;
+  }
+  __syncthreads();
+
+  if (init_cnt == 2) {
     if (threadIdx.x == 0) {
       printf("Init done\n");
     }
-
     send();
   }
 }
@@ -66,12 +70,12 @@ __device__ void Comm::send() {
       }
 #endif
     }
+    __syncthreads();
 #ifdef USER_MSG
     comm_proxy->invoke(peer, 2, msg, cur_size);
 #else
     comm_proxy->invoke(peer, 2, data, cur_size);
 #endif
-    __syncthreads();
 #ifdef MEASURE_INVOKE
     if (threadIdx.x == 0) {
       if (iter >= warmup) {
@@ -83,6 +87,7 @@ __device__ void Comm::send() {
         printf("Time per invoke: %.3lf us\n", invoke_time / n_iters * 1000000);
       }
     }
+    __syncthreads();
 #endif
   } else {
     // End iteration
@@ -90,19 +95,20 @@ __device__ void Comm::send() {
     if (threadIdx.x == 0) {
       printf("Index %d iter %d sending size %lu\n", index, iter, cur_size);
     }
+    __syncthreads();
 #endif
 #ifdef USER_MSG
     comm_proxy->invoke(peer, 2, msg, cur_size);
 #else
     comm_proxy->invoke(peer, 2, data, cur_size);
 #endif
-    __syncthreads();
     if (threadIdx.x == 0) {
       if (++iter == n_iters + warmup) {
         cur_size *= 2;
         iter = 0;
       }
     }
+    __syncthreads();
   }
 }
 
@@ -137,17 +143,23 @@ __device__ void Comm::recv(void* arg) {
   }
   __syncthreads();
 
-  if (end) return;
-
-  send();
+  if (!end) {
+    send();
+  }
 }
 
 // Main
 __device__ void charm::main(int argc, char** argv, size_t* argvs) {
   constexpr int n_params = 4;
-  size_t params[n_params] = {1, 65536, 100, 10};
+  __shared__ size_t params[n_params];
 
   if (threadIdx.x == 0) {
+    // Default parameters
+    params[0] = 1;
+    params[1] = 65536;
+    params[2] = 100;
+    params[3] = 10;
+
     // Process command line arguments
     if (argc >= 2) params[0] = charm::device_atoi(argv[1], argvs[1]);
     if (argc >= 3) params[1] = charm::device_atoi(argv[2], argvs[2]);
@@ -160,12 +172,7 @@ __device__ void charm::main(int argc, char** argv, size_t* argvs) {
   }
   __syncthreads();
 
-  /*
   Comm comm;
   comm_proxy->create(comm, 2);
-  __syncthreads();
-
   comm_proxy->invoke_all(0, params, sizeof(size_t) * n_params);
-  __syncthreads();
-  */
 }

@@ -1,7 +1,7 @@
 include ../../common.mk
 include ../examples.mk
 
-NVCC_CU_OPTS += #-DUSER_MSG
+NVCC_CU_OPTS += #-DDEBUG -DUSER_MSG
 
 TARGET = pingpong
 

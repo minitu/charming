@@ -8,3 +8,4 @@ CHARMING_PREFIX ?= $(HOME)/work/charming/install
 
 NVCC = nvcc
 ARCH = -arch=sm_70
+DEFS = #-DDEBUG
