@@ -12,6 +12,9 @@
 #include "heap.h"
 #include "util.h"
 
+// Use custom thread block extensions to NVSHMEM
+#define NVSHMEM_BLOCK_IMPL
+
 // Maximum number of messages that are allowed to be in flight per pair of PEs
 #define REMOTE_MSG_COUNT_MAX 4
 // Maximum number of messages that can be stored in the local message queue
@@ -194,9 +197,15 @@ __device__ void charm::comm::process_remote() {
   // Check if there are any message requests
   uint64_t* my_recv_remote_comp = recv_remote_comp + (REMOTE_MSG_COUNT_MAX * c_n_pes) * blockIdx.x;
   size_t* my_recv_remote_comp_idx = recv_remote_comp_idx + (REMOTE_MSG_COUNT_MAX * c_n_pes) * blockIdx.x;
+#ifdef NVSHMEM_BLOCK_IMPL
+  count = nvshmem_uint64_test_some_block(my_recv_remote_comp, REMOTE_MSG_COUNT_MAX * c_n_pes,
+      my_recv_remote_comp_idx, NVSHMEM_CMP_GT, 0);
+#endif
   if (threadIdx.x == 0) {
+#ifndef NVSHMEM_BLOCK_IMPL
     count = nvshmem_uint64_test_some(my_recv_remote_comp, REMOTE_MSG_COUNT_MAX * c_n_pes,
         my_recv_remote_comp_idx, nullptr, NVSHMEM_CMP_GT, 0);
+#endif
     s_mem[2] = (uint64_t)count;
   }
   __syncthreads();
@@ -294,9 +303,15 @@ __device__ void charm::comm::cleanup() {
   // Check for messages that have been delivered to the destination PE
   uint64_t* my_send_status = send_status + (REMOTE_MSG_COUNT_MAX * c_n_pes) * blockIdx.x;
   uint64_t* my_send_status_idx = send_status_idx + (REMOTE_MSG_COUNT_MAX * c_n_pes) * blockIdx.x;
+#ifdef NVSHMEM_BLOCK_IMPL
+  count = nvshmem_uint64_test_some_block(my_send_status, REMOTE_MSG_COUNT_MAX * c_n_pes,
+      my_send_status_idx, NVSHMEM_CMP_EQ, SIGNAL_CLUP);
+#endif
   if (threadIdx.x == 0) {
+#ifndef NVSHMEM_BLOCK_IMPL
     count = nvshmem_uint64_test_some(my_send_status, REMOTE_MSG_COUNT_MAX * c_n_pes,
         my_send_status_idx, nullptr, NVSHMEM_CMP_EQ, SIGNAL_CLUP);
+#endif
     s_mem[2] = (uint64_t)count;
   }
   __syncthreads();
