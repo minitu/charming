@@ -157,7 +157,7 @@ __device__ void charm::comm::process_local() {
       addr = my_mbuf->addr(src_offset);
       s_mem[1] = (uint64_t)addr; // Store in shared memory for other threads
       PDEBUG("PE %d receiving local message: offset %llu, size %llu\n",
-          s_mem[3], src_offset, msg_size);
+          (int)s_mem[3], src_offset, msg_size);
     } else {
       s_mem[1] = (uint64_t)nullptr;
     }
@@ -181,7 +181,7 @@ __device__ void charm::comm::process_local() {
         // Store composite to be cleared from memory
         addr_heap.push(src_composite);
         PDEBUG("PE %d flagging local message for cleanup: offset %llu, "
-            "size %llu\n", s_mem[3], src_offset, msg_size);
+            "size %llu\n", (int)s_mem[3], src_offset, msg_size);
       }
 #endif // !NO_CLEANUP
     }
@@ -268,6 +268,8 @@ __device__ void charm::comm::process_remote() {
             SIGNAL_FREE, NVSHMEM_SIGNAL_SET, s_mem[5]);
 
         int src_pe_nvshmem = src_pe / c_n_sms;
+        int src_pe_local = src_pe % c_n_sms;
+        uint64_t* src_send_status = send_status + (REMOTE_MSG_COUNT_MAX * c_n_pes) * src_pe_local;
 #ifndef NO_CLEANUP
         // Store composite to be cleared from memory
         composite_t dst_composite(dst_offset, msg_size);
@@ -277,8 +279,6 @@ __device__ void charm::comm::process_remote() {
             dst_composite.size(), src_pe, msg_idx);
 
         // Notify sender that message is ready for cleanup
-        int src_pe_local = src_pe % c_n_sms;
-        uint64_t* src_send_status = send_status + (REMOTE_MSG_COUNT_MAX * c_n_pes) * src_pe_local;
         int signal = (type == msgtype::user) ? SIGNAL_FREE : SIGNAL_CLUP;
         nvshmemx_signal_op(src_send_status + REMOTE_MSG_COUNT_MAX * my_pe + msg_idx,
             signal, NVSHMEM_SIGNAL_SET, src_pe_nvshmem);
@@ -329,7 +329,7 @@ __device__ void charm::comm::cleanup() {
         composite_t src_composite(my_send_comp[msg_idx]);
         addr_heap.push(src_composite);
         PDEBUG("PE %d flagging sent message for cleanup: offset %llu, size %llu, "
-            "dst PE %llu, idx %llu\n", s_mem[3], src_composite.offset(),
+            "dst PE %llu, idx %llu\n", (int)s_mem[3], src_composite.offset(),
             src_composite.size(), msg_idx / REMOTE_MSG_COUNT_MAX,
             msg_idx % REMOTE_MSG_COUNT_MAX);
 
@@ -357,7 +357,7 @@ __device__ void charm::comm::cleanup() {
         my_mbuf->release(clup_size);
         addr_heap.pop();
         PDEBUG("PE %d releasing message: offset %llu, size %llu\n",
-            s_mem[3], clup_offset, clup_size);
+            (int)s_mem[3], clup_offset, clup_size);
       } else break;
     }
   }

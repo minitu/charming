@@ -1,13 +1,12 @@
 #include <stdio.h>
-#include "pingpong.h"
+#include "self.h"
 
 __shared__ charm::chare_proxy<Comm>* comm_proxy;
 
 __device__ void charm::register_chares() {
-  comm_proxy = new charm::chare_proxy<Comm>(3);
+  comm_proxy = new charm::chare_proxy<Comm>(2);
   comm_proxy->add_entry_method(&Comm::init);
-  comm_proxy->add_entry_method(&Comm::init_done);
-  comm_proxy->add_entry_method(&Comm::recv);
+  comm_proxy->add_entry_method(&Comm::run);
 }
 
 __device__ void Comm::init(void* arg) {
@@ -29,7 +28,7 @@ __device__ void Comm::init(void* arg) {
 #endif
 
     index = charm::chare::i;
-    peer = (index == 0) ? 1 : 0;
+    self = 0;
 #ifdef MEASURE_INVOKE
     invoke_time = 0;
 #endif
@@ -37,32 +36,35 @@ __device__ void Comm::init(void* arg) {
   }
   __syncthreads();
 
-  comm_proxy->invoke(0, 1);
+  run(nullptr);
 }
 
-__device__ void Comm::init_done(void* arg) {
+__device__ void Comm::run(void* arg) {
+  __shared__ bool end;
+
   if (threadIdx.x == 0) {
-    init_cnt++;
-  }
-  __syncthreads();
+    end = false;
 
-  if (init_cnt == 2) {
-    if (threadIdx.x == 0) {
-      printf("Init done\n");
+    if (iter == n_iters + warmup) {
+      // End of iterations
+      end_tp = cuda::std::chrono::system_clock::now();
+      cuda::std::chrono::duration<double> diff = end_tp - start_tp;
+      printf("Size %llu took %.3lf us\n", cur_size, (diff.count() / n_iters) * 1000000);
+      cur_size *= 2;
+      iter = 0;
+      if (cur_size > max_size) {
+        charm::end();
+        end = true;
+      }
     }
-    send();
-  }
-}
 
-__device__ void Comm::send() {
-  if (index == 0) {
-    // Start iteration, only measure time on chare 0
-    if (threadIdx.x == 0) {
+    if (!end && iter < n_iters + warmup) {
+      // Continue next iteration
       if (iter == warmup) {
         start_tp = cuda::std::chrono::system_clock::now();
       }
 #ifdef DEBUG
-      printf("Index %d iter %d sending size %lu\n", index, iter, cur_size);
+      printf("Index %d iter %d size %lu\n", index, iter, cur_size);
 #endif
 #ifdef MEASURE_INVOKE
       if (iter >= warmup) {
@@ -70,14 +72,18 @@ __device__ void Comm::send() {
       }
 #endif
     }
-    __syncthreads();
+  }
+  __syncthreads();
+
+  if (!end) {
 #ifdef USER_MSG
-    comm_proxy->invoke(peer, 2, msg, cur_size);
+    comm_proxy->invoke(self, 1, msg, cur_size);
 #else
-    comm_proxy->invoke(peer, 2, data, cur_size);
+    comm_proxy->invoke(self, 1, data, cur_size);
 #endif
-#ifdef MEASURE_INVOKE
+
     if (threadIdx.x == 0) {
+#ifdef MEASURE_INVOKE
       if (iter >= warmup) {
         invoke_end_tp = cuda::std::chrono::system_clock::now();
         cuda::std::chrono::duration<double> diff = invoke_end_tp - invoke_start_tp;
@@ -87,65 +93,11 @@ __device__ void Comm::send() {
         printf("Time per invoke: %.3lf us\n", invoke_time / n_iters * 1000000);
         invoke_time = 0;
       }
+#endif
+
+      iter++;
     }
     __syncthreads();
-#endif
-  } else {
-    // End iteration
-#ifdef DEBUG
-    if (threadIdx.x == 0) {
-      printf("Index %d iter %d sending size %lu\n", index, iter, cur_size);
-    }
-    __syncthreads();
-#endif
-#ifdef USER_MSG
-    comm_proxy->invoke(peer, 2, msg, cur_size);
-#else
-    comm_proxy->invoke(peer, 2, data, cur_size);
-#endif
-    if (threadIdx.x == 0) {
-      if (++iter == n_iters + warmup) {
-        cur_size *= 2;
-        iter = 0;
-      }
-    }
-    __syncthreads();
-  }
-}
-
-__device__ void Comm::recv(void* arg) {
-  __shared__ bool end;
-  if (threadIdx.x == 0) {
-    end = false;
-  }
-  __syncthreads();
-
-  if (threadIdx.x == 0) {
-    if (index == 0) {
-#ifdef DEBUG
-      printf("Index %d iter %d received size %lu\n", index, iter, cur_size);
-#endif
-      if (++iter == n_iters + warmup) {
-        end_tp = cuda::std::chrono::system_clock::now();
-        cuda::std::chrono::duration<double> diff = end_tp - start_tp;
-        printf("Size %llu took %.3lf us\n", cur_size, (diff.count() / 2 / n_iters) * 1000000);
-        cur_size *= 2;
-        iter = 0;
-        if (cur_size > max_size) {
-          charm::end();
-          end = true;
-        }
-      }
-    } else {
-#ifdef DEBUG
-      printf("Index %d iter %d received size %lu\n", index, iter, cur_size);
-#endif
-    }
-  }
-  __syncthreads();
-
-  if (!end) {
-    send();
   }
 }
 
@@ -174,6 +126,6 @@ __device__ void charm::main(int argc, char** argv, size_t* argvs) {
   __syncthreads();
 
   Comm comm;
-  comm_proxy->create(comm, 2);
+  comm_proxy->create(comm, 1);
   comm_proxy->invoke_all(0, params, sizeof(size_t) * n_params);
 }
