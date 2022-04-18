@@ -100,7 +100,7 @@ struct chare_proxy : chare_proxy_base {
     if (threadIdx.x == 0) {
       n_local = n_local_;
       n_total = n_total_;
-      objects = n_local ? new C*[n_local] : nullptr;
+      objects = (n_local > 0) ? new C*[n_local] : nullptr;
       start_idx = start_idx_;
       end_idx = end_idx_;
 
