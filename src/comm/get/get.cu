@@ -413,8 +413,8 @@ __device__ void charm::send_msg(envelope* env, size_t offset, size_t msg_size, i
     uint64_t* my_send_status = send_status + (REMOTE_MSG_COUNT_MAX * c_n_pes) * blockIdx.x;
     size_t send_offset = REMOTE_MSG_COUNT_MAX * dst_pe;
     my_send_status += send_offset;
-    size_t msg_idx = nvshmem_uint64_wait_until_any(my_send_status, REMOTE_MSG_COUNT_MAX,
-        nullptr, NVSHMEM_CMP_EQ, SIGNAL_FREE);
+    size_t msg_idx = nvshmem_uint64_wait_until_any_block(my_send_status, REMOTE_MSG_COUNT_MAX,
+        NVSHMEM_CMP_EQ, SIGNAL_FREE);
     if (threadIdx.x == 0) {
       // Reserve send status
       nvshmemx_signal_op(my_send_status + msg_idx, SIGNAL_USED,
