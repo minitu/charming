@@ -3,6 +3,7 @@
 
 #include <nvshmem.h>
 #include <nvfunctional>
+#include "common.h"
 #include "message.h"
 #include "kernel.h"
 
@@ -119,12 +120,13 @@ struct chare_proxy : chare_proxy_base {
     if (map_ptr) {
       if (threadIdx.x == 0) {
         loc_map = new int[n_total];
-        s_mem[0] = (uint64_t)loc_map;
-        s_mem[1] = (uint64_t)map_ptr;
-        s_mem[2] = (uint64_t)(sizeof(int) * n_total);
+        s_mem[s_idx::dst] = (uint64_t)loc_map;
+        s_mem[s_idx::src] = (uint64_t)map_ptr;
+        s_mem[s_idx::size] = (uint64_t)(sizeof(int) * n_total);
       }
       __syncthreads();
-      memcpy_kernel((void*)s_mem[0], (void*)s_mem[1], (size_t)s_mem[2]);
+      memcpy_kernel((void*)s_mem[s_idx::dst], (void*)s_mem[s_idx::src],
+          (size_t)s_mem[s_idx::size]);
     }
   }
 
@@ -133,7 +135,7 @@ struct chare_proxy : chare_proxy_base {
   __device__ void create(C& obj, int n) {
     // Divide the chares across all PEs
     int n_pes = c_n_pes;
-    int my_pe = s_mem[3];
+    int my_pe = s_mem[s_idx::my_pe];
     int n_per_pe = n / n_pes;
     int rem = n % n_pes;
 
@@ -197,25 +199,34 @@ struct chare_proxy : chare_proxy_base {
 
           // Create message
           env = create_envelope(msgtype::create, msg_size, &offset);
+          s_mem[s_idx::env] = (uint64_t)env;
+          s_mem[s_idx::offset] = (uint64_t)offset;
+          s_mem[s_idx::msg_size] = (uint64_t)msg_size;
           create_msg* msg = new ((char*)env + sizeof(envelope)) create_msg(id, n_this, n, start_idx_, end_idx_);
 
           // Pack location map and seed object
           tmp = (char*)msg + sizeof(create_msg);
-          s_mem[0] = (uint64_t)tmp;
-          s_mem[1] = (uint64_t)loc_map;
-          s_mem[2] = (uint64_t)map_size;
+          s_mem[s_idx::dst] = (uint64_t)tmp;
+          s_mem[s_idx::src] = (uint64_t)loc_map;
+          s_mem[s_idx::size] = (uint64_t)map_size;
         }
         __syncthreads();
-        memcpy_kernel((void*)s_mem[0], (void*)s_mem[1], (size_t)s_mem[2]);
+        env = (envelope*)s_mem[s_idx::env];
+        offset = (size_t)s_mem[s_idx::offset];
+        msg_size = (size_t)s_mem[s_idx::msg_size];
 
+        // Copy message content
+        memcpy_kernel((void*)s_mem[s_idx::dst], (void*)s_mem[s_idx::src], (size_t)s_mem[s_idx::size]);
+
+        // Pack user object
         if (threadIdx.x == 0) {
           tmp += map_size;
           obj.pack(tmp);
-
-          // Send creation message to target PE
-          send_msg(env, offset, msg_size, pe);
         }
         __syncthreads();
+
+        // Send creation message to target PE
+        send_msg(env, offset, msg_size, pe);
       }
 
       // Update start chare index

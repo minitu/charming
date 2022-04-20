@@ -8,11 +8,11 @@
 #include <nvshmemx.h>
 
 #include "charming.h"
+#include "common.h"
 #include "message.h"
 #include "comm.h"
 #include "scheduler.h"
 #include "util.h"
-
 
 using namespace charm;
 
@@ -190,12 +190,12 @@ int main(int argc, char* argv[]) {
 
 __device__ void charm::end() {
   // TODO: Check if begin_terminate message has already been sent from this PE
-  send_begin_term_msg(0);
+  send_term_msg(true, 0);
 }
 
-__device__ int charm::my_pe() { return s_mem[3]; }
+__device__ int charm::my_pe() { return s_mem[s_idx::my_pe]; }
 __device__ int charm::n_pes() { return c_n_pes; }
-__device__ int charm::my_pe_node() { return s_mem[4]; }
+__device__ int charm::my_pe_node() { return s_mem[s_idx::my_pe_node]; }
 __device__ int charm::n_pes_node() { return c_n_pes_node; }
 __device__ int charm::n_nodes() { return c_n_nodes; }
 

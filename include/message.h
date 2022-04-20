@@ -5,7 +5,7 @@
 
 namespace charm {
 
-enum class msgtype {
+enum class msgtype : int {
   regular,
   create,
   begin_terminate,
@@ -70,8 +70,7 @@ __device__ void send_user_msg(int chare_id, int chare_idx, int ep_id,
     const message& msg, int dst_pe);
 __device__ void send_user_msg(int chare_id, int chare_idx, int ep_id,
     const message& msg, size_t payload_size, int dst_pe);
-__device__ void send_begin_term_msg(int dst_pe);
-__device__ void send_do_term_msg(int dst_pe);
+__device__ void send_term_msg(bool begin, int dst_pe);
 
 }
 

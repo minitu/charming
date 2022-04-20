@@ -4,19 +4,6 @@
 #include "chare.h"
 #include "message.h"
 
-// Print functions
-#define PINFO(...) printf("[INFO] " __VA_ARGS__)
-#define PERROR(...) printf("[ERROR] " __VA_ARGS__)
-#ifdef DEBUG
-#define PDEBUG(...) printf("[DEBUG] " __VA_ARGS__)
-#else
-#define PDEBUG(...) do {} while (0)
-#endif
-
-// Max number of 64-bit values in shared memory
-// Used to coordinate fork-join model in scheduler
-#define SMEM_CNT_MAX 128
-
 namespace charm {
 
 // User functions required by the runtime

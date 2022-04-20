@@ -53,7 +53,6 @@ __device__ void Comm::run(void* arg) {
       cur_size *= 2;
       iter = 0;
       if (cur_size > max_size) {
-        charm::end();
         end = true;
       }
     }
@@ -75,7 +74,9 @@ __device__ void Comm::run(void* arg) {
   }
   __syncthreads();
 
-  if (!end) {
+  if (end) {
+    charm::end();
+  } else {
 #ifdef USER_MSG
     comm_proxy->invoke(self, 1, msg, cur_size);
 #else

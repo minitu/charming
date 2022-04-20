@@ -132,7 +132,6 @@ __device__ void Comm::recv(void* arg) {
         cur_size *= 2;
         iter = 0;
         if (cur_size > max_size) {
-          charm::end();
           end = true;
         }
       }
@@ -144,7 +143,9 @@ __device__ void Comm::recv(void* arg) {
   }
   __syncthreads();
 
-  if (!end) {
+  if (end) {
+    charm::end();
+  } else {
     send();
   }
 }

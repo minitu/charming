@@ -3,6 +3,7 @@
 #include <cooperative_groups.h>
 
 #include "charming.h"
+#include "common.h"
 #include "message.h"
 #include "comm.h"
 #include "scheduler.h"
@@ -30,7 +31,7 @@ extern __shared__ uint64_t s_mem[];
 
 __device__ msgtype charm::process_msg(void* addr, ssize_t* processed_size,
     bool& begin_term_flag, bool& do_term_flag) {
-  int my_pe = s_mem[3];
+  int my_pe = s_mem[s_idx::my_pe];
   envelope* env = (envelope*)addr;
   msgtype type = env->type;
   if (threadIdx.x == 0) {
@@ -75,16 +76,17 @@ __device__ msgtype charm::process_msg(void* addr, ssize_t* processed_size,
     assert(my_pe == 0);
 
     // Begin termination message
-    if (threadIdx.x == 0) {
-    PDEBUG("PE %d begin terminate msg\n", my_pe);
-      if (!begin_term_flag) {
-        for (int i = 0; i < n_pes(); i++) {
-          send_do_term_msg(i);
-        }
+    if (!begin_term_flag) {
+      if (threadIdx.x == 0) {
+        PDEBUG("PE %d begin terminate msg\n", my_pe);
         begin_term_flag = true;
       }
+      __syncthreads();
+
+      for (int pe = 0; pe < c_n_pes; pe++) {
+        send_term_msg(false, pe);
+      }
     }
-    __syncthreads();
 
   } else if (type == msgtype::do_terminate) {
     // Do termination message
@@ -115,7 +117,7 @@ __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
   cg::grid_group grid = cg::this_grid();
 
   // Communication module resides in shared memory (one per PE/TB)
-  comm* c = (comm*)(s_mem+SMEM_CNT_MAX);
+  comm* c = (comm*)(s_mem + SMEM_CNT_MAX);
 
   if (threadIdx.x == 0) {
     // Register user chares and entry methods
@@ -125,9 +127,9 @@ __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
     c->init();
 
     // Store my PE number in shared memory
-    s_mem[3] = c_my_dev * c_n_sms + blockIdx.x; // CharminG PE
-    s_mem[4] = c_my_dev_node * c_n_sms + blockIdx.x; // CharminG PE rank on physical node
-    s_mem[5] = s_mem[3] / c_n_sms; // NVSHMEM PE
+    s_mem[s_idx::my_pe] = c_my_dev * c_n_sms + blockIdx.x; // CharminG PE
+    s_mem[s_idx::my_pe_node] = c_my_dev_node * c_n_sms + blockIdx.x; // CharminG PE rank on physical node
+    s_mem[s_idx::my_pe_nvshmem] = s_mem[s_idx::my_pe] / c_n_sms; // NVSHMEM PE
   }
   __syncthreads();
 
@@ -138,7 +140,7 @@ __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
   }
   grid.sync();
 
-  int my_pe = s_mem[3];
+  int my_pe = s_mem[s_idx::my_pe];
   if (my_pe == 0) {
     // Execute user's main function
     main(argc, argv, argvs);
