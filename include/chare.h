@@ -199,9 +199,6 @@ struct chare_proxy : chare_proxy_base {
 
           // Create message
           env = create_envelope(msgtype::create, msg_size, &offset);
-          s_mem[s_idx::env] = (uint64_t)env;
-          s_mem[s_idx::offset] = (uint64_t)offset;
-          s_mem[s_idx::msg_size] = (uint64_t)msg_size;
           create_msg* msg = new ((char*)env + sizeof(envelope)) create_msg(id, n_this, n, start_idx_, end_idx_);
 
           // Pack location map and seed object
@@ -211,22 +208,19 @@ struct chare_proxy : chare_proxy_base {
           s_mem[s_idx::size] = (uint64_t)map_size;
         }
         __syncthreads();
-        env = (envelope*)s_mem[s_idx::env];
-        offset = (size_t)s_mem[s_idx::offset];
-        msg_size = (size_t)s_mem[s_idx::msg_size];
 
         // Copy message content
         memcpy_kernel((void*)s_mem[s_idx::dst], (void*)s_mem[s_idx::src], (size_t)s_mem[s_idx::size]);
 
-        // Pack user object
         if (threadIdx.x == 0) {
+          // Pack user object
           tmp += map_size;
           obj.pack(tmp);
+
+          // Send creation message to target PE
+          send_msg(env, offset, msg_size, pe);
         }
         __syncthreads();
-
-        // Send creation message to target PE
-        send_msg(env, offset, msg_size, pe);
       }
 
       // Update start chare index

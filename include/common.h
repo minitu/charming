@@ -19,9 +19,6 @@ enum s_idx : int {
   dst = 0,
   src = 1,
   size = 2,
-  env = 3,
-  offset = 4,
-  msg_size = 5,
   my_pe = 8,
   my_pe_node = 9,
   my_pe_nvshmem = 10
