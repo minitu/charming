@@ -16,8 +16,16 @@ struct alignas(ALIGN_SIZE) comm {
 #if CHARMING_COMM_TYPE == 0
   min_heap addr_heap;
 #endif
+
   bool begin_term_flag;
   bool do_term_flag;
+
+#ifdef MEASURE_TIME
+  double local_time;
+  double remote_time;
+  double cleanup_time;
+  int n_iters;
+#endif
 
   __device__ void init();
   __device__ void process_local();

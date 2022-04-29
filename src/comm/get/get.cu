@@ -136,8 +136,16 @@ __device__ void charm::comm::init() {
   int comp_count = heap_buf_size / c_n_sms / sizeof(composite_t);
   composite_t* my_heap_buf = heap_buf + comp_count * blockIdx.x;
   addr_heap.init(my_heap_buf, comp_count);
+
   begin_term_flag = false;
   do_term_flag = false;
+
+#ifdef MEASURE_TIME
+  local_time = 0;
+  remote_time = 0;
+  cleanup_time = 0;
+  n_iters = 0;
+#endif
 }
 
 __device__ void charm::comm::process_local() {
