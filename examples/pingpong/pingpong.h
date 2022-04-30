@@ -4,6 +4,7 @@
 #include <cuda/std/chrono>
 #include <charming.h>
 
+// Chare object
 struct Comm : charm::chare {
   int init_cnt;
   int index;
@@ -35,5 +36,10 @@ struct Comm : charm::chare {
   __device__ void send();
   __device__ void recv(void* arg);
 };
+
+// Entry methods
+__device__ void entry_init(Comm& c, void* arg) { c.init(arg); }
+__device__ void entry_init_done(Comm& c, void* arg) { c.init_done(arg); }
+__device__ void entry_recv(Comm& c, void* arg) { c.recv(arg); }
 
 #endif

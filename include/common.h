@@ -1,6 +1,8 @@
 #ifndef _COMMON_H_
 #define _COMMON_H_
 
+#include <nvfunctional> // For placement new
+
 // Print functions
 #define PINFO(...) printf("[INFO] " __VA_ARGS__)
 #define PERROR(...) printf("[ERROR] " __VA_ARGS__)

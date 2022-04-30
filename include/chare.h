@@ -2,7 +2,6 @@
 #define _CHARE_H_
 
 #include <nvshmem.h>
-#include <nvfunctional>
 #include "common.h"
 #include "message.h"
 #include "kernel.h"
@@ -30,12 +29,14 @@ struct chare {
   __device__ void unpack(void* ptr) {}
 };
 
-template <typename C>
-struct entry_method {
-  nvstd::function<void(C&,void*)> fn;
+template <class C>
+struct entry_method_base {
+  __device__ virtual void operator()(C& chare, void* arg) = 0;
+};
 
-  __device__ entry_method(nvstd::function<void(C&,void*)> fn_) : fn(fn_) {}
-  __device__ virtual void call(void* chare, void* arg) const { fn(*(C*)chare, arg); }
+template <class C, void Func(C&, void*)>
+struct entry_method : entry_method_base<C> {
+  __device__ virtual void operator()(C& chare, void* arg) { Func(chare, arg); }
 };
 
 struct chare_proxy_base {
@@ -73,7 +74,7 @@ struct chare_proxy : chare_proxy_base {
 
   int* loc_map; // Chare-PE location map
 
-  entry_method<C>** entry_methods; // Entry methods
+  entry_method_base<C>** entry_methods; // Entry methods
   int em_count; // Number of registered entry methods
 
   __device__ chare_proxy(int n_em)
@@ -86,12 +87,13 @@ struct chare_proxy : chare_proxy_base {
     my_proxy_table.proxies[id] = this;
 
     // Allocate entry method table
-    entry_methods = new entry_method<C>*[n_em];
+    entry_methods = new entry_method_base<C>*[n_em];
   }
 
   // Add entry method to table
-  __device__ void add_entry_method(const nvstd::function<void(C&,void*)>& fn) {
-    entry_methods[em_count++] = new entry_method<C>(fn);
+  template <void Func(C&, void*)>
+  __device__ void add_entry_method() {
+    entry_methods[em_count++] = new entry_method<C, Func>();
   }
 
   // Create local chares
@@ -231,7 +233,7 @@ struct chare_proxy : chare_proxy_base {
 
   __device__ virtual void call(int idx, int ep, void* arg) {
     assert(idx >= start_idx && idx <= end_idx);
-    entry_methods[ep]->call(objects[idx - start_idx], arg);
+    (*(entry_methods[ep]))(*(objects[idx - start_idx]), arg);
   }
 
   // Note: Chare should have been already created at this PE via a creation message

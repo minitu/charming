@@ -5,9 +5,9 @@ __shared__ charm::chare_proxy<Comm>* comm_proxy;
 
 __device__ void charm::register_chares() {
   comm_proxy = new charm::chare_proxy<Comm>(3);
-  comm_proxy->add_entry_method(&Comm::init);
-  comm_proxy->add_entry_method(&Comm::init_done);
-  comm_proxy->add_entry_method(&Comm::recv);
+  comm_proxy->add_entry_method<&entry_init>();
+  comm_proxy->add_entry_method<&entry_init_done>();
+  comm_proxy->add_entry_method<&entry_recv>();
 }
 
 __device__ void Comm::init(void* arg) {
