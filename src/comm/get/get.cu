@@ -139,13 +139,6 @@ __device__ void charm::comm::init() {
 
   begin_term_flag = false;
   do_term_flag = false;
-
-#ifdef MEASURE_TIME
-  local_time = 0;
-  remote_time = 0;
-  cleanup_time = 0;
-  n_iters = 0;
-#endif
 }
 
 __device__ void charm::comm::process_local() {

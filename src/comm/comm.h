@@ -20,13 +20,6 @@ struct alignas(ALIGN_SIZE) comm {
   bool begin_term_flag;
   bool do_term_flag;
 
-#ifdef MEASURE_TIME
-  double local_time;
-  double remote_time;
-  double cleanup_time;
-  int n_iters;
-#endif
-
   __device__ void init();
   __device__ void process_local();
   __device__ void process_remote();

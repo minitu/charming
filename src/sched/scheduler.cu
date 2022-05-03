@@ -1,9 +1,6 @@
 #include <nvshmem.h>
 #include <nvshmemx.h>
 #include <cooperative_groups.h>
-#ifdef MEASURE_TIME
-#include <cuda/std/chrono>
-#endif
 
 #include "charming.h"
 #include "common.h"
@@ -110,30 +107,9 @@ __device__ msgtype charm::process_msg(void* addr, ssize_t* processed_size,
 }
 
 __device__ __forceinline__ void loop(comm* c) {
-#ifdef MEASURE_TIME
-  c->n_iters++;
-  auto start = cuda::std::chrono::system_clock::now();
-#endif
   c->process_local();
-#ifdef MEASURE_TIME
-  auto end = cuda::std::chrono::system_clock::now();
-  cuda::std::chrono::duration<double> diff = end - start;
-  c->local_time += diff.count();
-  start = cuda::std::chrono::system_clock::now();
-#endif
   c->process_remote();
-#ifdef MEASURE_TIME
-  end = cuda::std::chrono::system_clock::now();
-  diff = end - start;
-  c->remote_time += diff.count();
-  start = cuda::std::chrono::system_clock::now();
-#endif
   c->cleanup();
-#ifdef MEASURE_TIME
-  end = cuda::std::chrono::system_clock::now();
-  diff = end - start;
-  c->cleanup_time += diff.count();
-#endif
 }
 
 __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
@@ -188,11 +164,6 @@ __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
   grid.sync();
 
   if (threadIdx.x == 0) {
-#ifdef MEASURE_TIME
-    PINFO("PE %d scheduler time breakdown - local: %.3lf us, remote: %.3lf us, cleanup: %.3lf us\n",
-        my_pe, c->local_time / c->n_iters * 1e6, c->remote_time / c->n_iters * 1e6,
-        c->cleanup_time / c->n_iters * 1e6);
-#endif
     PDEBUG("PE %d terminating...\n", my_pe);
   }
 }
