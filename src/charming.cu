@@ -144,6 +144,8 @@ int main(int argc, char* argv[]) {
   //constexpr size_t new_heap_size = 8589934592; // Set max heap size to 8GB
   //cudaDeviceSetLimit(cudaLimitMallocHeapSize, new_heap_size);
   cudaDeviceGetLimit(&heap_size, cudaLimitMallocHeapSize);
+  cudaDeviceSetCacheConfig(cudaFuncCachePreferL1);
+  cuda_check_error();
 
   // Print configuration
   dim3 grid_dim = dim3(h_n_sms);
