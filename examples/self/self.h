@@ -34,4 +34,8 @@ struct Comm : charm::chare {
   __device__ void run(void* arg);
 };
 
+// Entry methods
+__device__ void entry_init(Comm& c, void* arg) { c.init(arg); }
+__device__ void entry_run(Comm& c, void* arg) { c.run(arg); }
+
 #endif
