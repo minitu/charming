@@ -55,7 +55,8 @@ int main(int argc, char* argv[]) {
   cudaDeviceProp prop;
   cudaGetDeviceProperties(&prop, 0);
   int max_threads_tb = prop.maxThreadsPerBlock;
-  int h_n_sms = prop.multiProcessorCount;
+  //int h_n_sms = prop.multiProcessorCount;
+  int h_n_sms = 2;
   int h_my_dev = nvshmem_my_pe();
   int h_my_dev_node = nvshmem_team_my_pe(NVSHMEMX_TEAM_NODE);
   int h_n_devs = nvshmem_n_pes();
@@ -141,8 +142,8 @@ int main(int argc, char* argv[]) {
   constexpr size_t new_stack_size = 16384;
   cudaDeviceSetLimit(cudaLimitStackSize, new_stack_size);
   cudaDeviceGetLimit(&stack_size, cudaLimitStackSize);
-  //constexpr size_t new_heap_size = 8589934592; // Set max heap size to 8GB
-  //cudaDeviceSetLimit(cudaLimitMallocHeapSize, new_heap_size);
+  constexpr size_t new_heap_size = 1073741824;
+  cudaDeviceSetLimit(cudaLimitMallocHeapSize, new_heap_size);
   cudaDeviceGetLimit(&heap_size, cudaLimitMallocHeapSize);
   cudaDeviceSetCacheConfig(cudaFuncCachePreferL1);
   cuda_check_error();

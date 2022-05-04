@@ -36,10 +36,13 @@ struct alignas(ALIGN_SIZE) envelope {
 struct alignas(ALIGN_SIZE) message {
   envelope* env;
   size_t offset;
+  int dst_pe;
 
-  __device__ message() : env(nullptr), offset(0) {}
+  __device__ message() : env(nullptr), offset(0), dst_pe(-1) {}
+  /*
   __device__ void alloc(size_t size);
   __device__ void free();
+  */
 };
 
 struct alignas(ALIGN_SIZE) regular_msg {
@@ -62,14 +65,16 @@ struct alignas(ALIGN_SIZE) create_msg {
     : chare_id(chare_id_), n_local(n_local_), n_total(n_total_), start_idx(start_idx_), end_idx(end_idx_) {}
 };
 
-__device__ envelope* create_envelope(msgtype type, size_t msg_size, size_t* offset);
-__device__ void send_msg(envelope* env, size_t offset, size_t msg_size, int dst_pe);
+__device__ envelope* create_envelope(msgtype type, size_t msg_size,
+    size_t* offset, int dst_pe);
+__device__ void send_msg(envelope* env, size_t offset, size_t msg_size,
+    int dst_pe);
 __device__ void send_reg_msg(int chare_id, int chare_idx, int ep_id, void* buf,
     size_t payload_size, int dst_pe);
 __device__ void send_user_msg(int chare_id, int chare_idx, int ep_id,
-    const message& msg, int dst_pe);
+    const message& msg);
 __device__ void send_user_msg(int chare_id, int chare_idx, int ep_id,
-    const message& msg, size_t payload_size, int dst_pe);
+    const message& msg, size_t payload_size);
 __device__ void send_term_msg(bool begin, int dst_pe);
 
 }

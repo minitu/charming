@@ -22,14 +22,14 @@ __device__ void Comm::init(void* arg) {
     n_iters = static_cast<int>(params[param_idx++]);
     warmup = static_cast<int>(params[param_idx++]);
     iter = 0;
+    index = charm::chare::i;
+    peer = (index == 0) ? 1 : 0;
 #ifdef USER_MSG
-    msg.alloc(max_size);
+    comm_proxy->alloc_msg(msg, peer, max_size);
 #else
     data = new char[max_size];
 #endif
 
-    index = charm::chare::i;
-    peer = (index == 0) ? 1 : 0;
 #ifdef MEASURE_INVOKE
     invoke_time = 0;
 #endif
@@ -176,5 +176,5 @@ __device__ void charm::main(int argc, char** argv, size_t* argvs) {
 
   Comm comm;
   comm_proxy->create(comm, 2);
-  comm_proxy->invoke_all(0, params, sizeof(size_t) * n_params);
+  //comm_proxy->invoke_all(0, params, sizeof(size_t) * n_params);
 }

@@ -16,14 +16,22 @@
 // Used to coordinate fork-join model in scheduler
 #define SMEM_CNT_MAX 128
 
+extern __constant__ int c_n_sms;
+
 // Indices into shared memory
 enum s_idx : int {
   dst = 0,
   src = 1,
   size = 2,
+  env = 3,
+  offset = 4,
+  msg_size = 5,
   my_pe = 8,
   my_pe_node = 9,
   my_pe_nvshmem = 10
 };
+
+__device__ __forceinline__ int get_pe_nvshmem(int pe) { return pe / c_n_sms; }
+__device__ __forceinline__ int get_pe_local(int pe) { return pe % c_n_sms; }
 
 #endif // _COMMON_H_
