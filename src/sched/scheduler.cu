@@ -155,6 +155,8 @@ __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
   // Loop until termination
   do {
     loop(c);
+    __nanosleep(1e6);
+    //printf("@@@ PE %d loop\n", my_pe);
   } while (!c->do_term_flag);
 
   // Global synchronization

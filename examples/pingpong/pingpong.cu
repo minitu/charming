@@ -176,5 +176,5 @@ __device__ void charm::main(int argc, char** argv, size_t* argvs) {
 
   Comm comm;
   comm_proxy->create(comm, 2);
-  //comm_proxy->invoke_all(0, params, sizeof(size_t) * n_params);
+  comm_proxy->invoke_all(0, params, sizeof(size_t) * n_params);
 }

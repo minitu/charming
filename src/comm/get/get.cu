@@ -51,7 +51,7 @@ __device__ __managed__ size_t* recv_remote_comp_idx; // Global
 __device__ __managed__ composite_t* heap_buf; // Global
 __device__ __managed__ size_t heap_buf_size;
 */
-__device__ __managed__ envelope** recv_env;
+__device__ __managed__ volatile envelope** recv_env;
 
 // GPU shared memory
 extern __shared__ uint64_t s_mem[];
@@ -164,20 +164,27 @@ __device__ void charm::comm::init() {
   do_term_flag = false;
 }
 
-__device__ __forceinline__ envelope* find_msg(envelope** envs) {
+// TODO: idx_ is only used for debugging purposes
+/*
+__device__ __forceinline__ envelope* find_msg(volatile envelope** envs, int& idx_) {
   __shared__ volatile int idx;
-  if (threadIdx.x == 0) idx = -1;
+  if (threadIdx.x == 0) idx = INT_MAX;
   __syncthreads();
 
   // Look for a valid message (traverse once)
+  // TODO
+  while (idx == INT_MAX) {
   for (int i = threadIdx.x; i < LOCAL_MAX * c_n_sms; i += blockDim.x) {
     if (envs[i] != nullptr) {
-      atomicCAS_block((int*)&idx, -1, i);
+      //atomicCAS_block((int*)&idx, -1, i);
+      atomicMin_block((int*)&idx, i);
     }
+  }
   }
   __syncthreads();
 
-  envelope* env = (idx == -1) ? nullptr : envs[idx];
+  envelope* env = (idx == INT_MAX) ? nullptr : (envelope*)envs[idx];
+  idx_ = idx;
   __syncthreads();
 
   // Reset to zero for message to be processed
@@ -189,22 +196,52 @@ __device__ __forceinline__ envelope* find_msg(envelope** envs) {
 
   return env;
 }
+*/
+__device__ __forceinline__ envelope* find_msg(volatile envelope** envs, int& idx_) {
+  __shared__ envelope* env;
+  __shared__ int idx;
+  if (threadIdx.x == 0) {
+    idx = INT_MAX;
+    env = nullptr;
+
+    for (int i = 0; i < LOCAL_MAX * c_n_sms; i++) {
+      if (envs[i] != nullptr) {
+        idx = i;
+        env = (envelope*)envs[i];
+      }
+    }
+
+    if (env) {
+      unsigned long long int ret = atomicCAS((unsigned long long int*)&envs[idx],
+          (unsigned long long int)env, 0);
+      assert(ret == (unsigned long long)env);
+    }
+  }
+  __syncthreads();
+  idx_ = idx;
+
+  return env;
+}
 
 __device__ void charm::comm::process_local() {
   // Look for valid message addresses
-  envelope** my_env = recv_env + LOCAL_MAX * c_n_sms * get_pe_local(s_mem[s_idx::my_pe]);
-  envelope* env = find_msg(my_env);
+  volatile envelope** my_env = recv_env + LOCAL_MAX * c_n_sms * get_pe_local(s_mem[s_idx::my_pe]);
+  int idx;
+  envelope* env = find_msg(my_env, idx);
   if (env) {
     // Process message in parallel
     if (threadIdx.x == 0) {
-      printf("!!! received env %p\n", env);
+      int src_sm = idx / LOCAL_MAX;
+      int real_idx = idx % LOCAL_MAX;
+      printf("!!! SM %d received message (env %p msgtype %d size %llu src PE %d) from SM %d at index %d\n",
+          blockIdx.x, env, env->type, env->size, env->src_pe, src_sm, real_idx);
     }
     msgtype type = process_msg(env, nullptr, begin_term_flag, do_term_flag);
 
     // Message cleanup
     if (threadIdx.x == 0) {
       if (type != msgtype::user) {
-        delete env;
+        delete[] (char*)env;
       }
     }
     __syncthreads();
@@ -450,7 +487,8 @@ __device__ envelope* charm::create_envelope(msgtype type, size_t msg_size,
   int dst_pe_nvshmem = get_pe_nvshmem(dst_pe);
   if (dst_pe_nvshmem == s_mem[s_idx::my_pe_nvshmem]) {
     // Destination is on the same NVSHMEM PE
-    return new envelope(type, msg_size, s_mem[s_idx::my_pe]);
+    char* msg = new char[msg_size];
+    return new (msg) envelope(type, msg_size, s_mem[s_idx::my_pe]);
   } else {
     // TODO: Destination is on a different NVSHMEM PE
   }
@@ -472,16 +510,17 @@ __device__ envelope* charm::create_envelope(msgtype type, size_t msg_size,
   */
 }
 
-__device__ __forceinline__ int find_free(envelope** envs) {
+__device__ __forceinline__ int find_free(volatile envelope** envs) {
   __shared__ volatile int idx;
-  if (threadIdx.x == 0) idx = -1;
+  if (threadIdx.x == 0) idx = INT_MAX;
   __syncthreads();
 
   // Loop until a free index is found
-  while (idx == -1) {
+  while (idx == INT_MAX) {
     for (int i = threadIdx.x; i < LOCAL_MAX; i += blockDim.x) {
       if (envs[i] == nullptr) {
-        atomicCAS_block((int*)&idx, -1, i);
+        //atomicCAS_block((int*)&idx, -1, i);
+        atomicMin_block((int*)&idx, i);
       }
     }
   }
@@ -495,7 +534,7 @@ __device__ void charm::send_msg(envelope* env, size_t offset, size_t msg_size, i
   int dst_pe_local = get_pe_local(dst_pe);
   if (get_pe_nvshmem(dst_pe) == s_mem[s_idx::my_pe_nvshmem]) {
     // Message local to this NVSHMEM PE
-    envelope** dst_env = recv_env + LOCAL_MAX * c_n_sms * dst_pe_local
+    volatile envelope** dst_env = recv_env + LOCAL_MAX * c_n_sms * dst_pe_local
       + LOCAL_MAX * src_pe_local;
 
     // Find free message index
@@ -503,6 +542,8 @@ __device__ void charm::send_msg(envelope* env, size_t offset, size_t msg_size, i
 
     // Atomically store message address
     if (threadIdx.x == 0) {
+      printf("!!! SM %d atomically storing message (env %p msgtype %d size %llu src PE %d) to SM %d at index %d\n",
+          src_pe_local, env, env->type, env->size, env->src_pe, dst_pe_local, free_idx);
       unsigned long long int ret = atomicCAS((unsigned long long int*)&dst_env[free_idx], 0,
           (unsigned long long int)env);
       assert(ret == 0);
