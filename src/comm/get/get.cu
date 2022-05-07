@@ -51,7 +51,9 @@ __device__ __managed__ size_t* recv_remote_comp_idx; // Global
 __device__ __managed__ composite_t* heap_buf; // Global
 __device__ __managed__ size_t heap_buf_size;
 */
-__device__ __managed__ volatile envelope** recv_env;
+//__device__ __managed__ volatile envelope** recv_envs;
+envelope** d_recv_envs;
+__device__ volatile envelope** recv_envs;
 
 // GPU shared memory
 extern __shared__ uint64_t s_mem[];
@@ -65,11 +67,13 @@ enum {
 void charm::comm_init_host(int n_pes, int n_sms) {
   // Allocate memory
   size_t env_size = sizeof(envelope*) * LOCAL_MAX * n_sms * n_sms;
-  cudaMalloc(&recv_env, env_size);
-  assert(recv_env);
+  cudaMalloc(&d_recv_envs, env_size);
+  assert(d_recv_envs);
 
-  // Clear data structures
-  cudaMemsetAsync(recv_env, 0, env_size, stream);
+  // Clear data structure and store its address in device
+  cudaMemsetAsync(d_recv_envs, 0, env_size, stream);
+  cudaMemcpyToSymbolAsync(recv_envs, &d_recv_envs, sizeof(envelope**), 0,
+      cudaMemcpyHostToDevice, stream);
   cudaStreamSynchronize(stream);
 
   /*
@@ -126,7 +130,7 @@ void charm::comm_init_host(int n_pes, int n_sms) {
 }
 
 void charm::comm_fini_host(int n_pes, int n_sms) {
-  cudaFree(recv_env);
+  cudaFree(d_recv_envs);
 
   /*
   cudaFree(send_comp);
@@ -165,21 +169,18 @@ __device__ void charm::comm::init() {
 }
 
 // TODO: idx_ is only used for debugging purposes
-/*
 __device__ __forceinline__ envelope* find_msg(volatile envelope** envs, int& idx_) {
   __shared__ volatile int idx;
   if (threadIdx.x == 0) idx = INT_MAX;
   __syncthreads();
 
   // Look for a valid message (traverse once)
-  // TODO
-  while (idx == INT_MAX) {
   for (int i = threadIdx.x; i < LOCAL_MAX * c_n_sms; i += blockDim.x) {
     if (envs[i] != nullptr) {
       //atomicCAS_block((int*)&idx, -1, i);
       atomicMin_block((int*)&idx, i);
     }
-  }
+    __threadfence();
   }
   __syncthreads();
 
@@ -196,7 +197,7 @@ __device__ __forceinline__ envelope* find_msg(volatile envelope** envs, int& idx
 
   return env;
 }
-*/
+/*
 __device__ __forceinline__ envelope* find_msg(volatile envelope** envs, int& idx_) {
   __shared__ envelope* env;
   __shared__ int idx;
@@ -209,6 +210,7 @@ __device__ __forceinline__ envelope* find_msg(volatile envelope** envs, int& idx
         idx = i;
         env = (envelope*)envs[i];
       }
+      __threadfence();
     }
 
     if (env) {
@@ -222,10 +224,11 @@ __device__ __forceinline__ envelope* find_msg(volatile envelope** envs, int& idx
 
   return env;
 }
+*/
 
 __device__ void charm::comm::process_local() {
   // Look for valid message addresses
-  volatile envelope** my_env = recv_env + LOCAL_MAX * c_n_sms * get_pe_local(s_mem[s_idx::my_pe]);
+  volatile envelope** my_env = recv_envs + LOCAL_MAX * c_n_sms * get_pe_local(s_mem[s_idx::my_pe]);
   int idx;
   envelope* env = find_msg(my_env, idx);
   if (env) {
@@ -242,6 +245,7 @@ __device__ void charm::comm::process_local() {
     if (threadIdx.x == 0) {
       if (type != msgtype::user) {
         delete[] (char*)env;
+        __threadfence();
       }
     }
     __syncthreads();
@@ -488,7 +492,9 @@ __device__ envelope* charm::create_envelope(msgtype type, size_t msg_size,
   if (dst_pe_nvshmem == s_mem[s_idx::my_pe_nvshmem]) {
     // Destination is on the same NVSHMEM PE
     char* msg = new char[msg_size];
-    return new (msg) envelope(type, msg_size, s_mem[s_idx::my_pe]);
+    envelope* env = new (msg) envelope(type, msg_size, s_mem[s_idx::my_pe]);
+    __threadfence();
+    return env;
   } else {
     // TODO: Destination is on a different NVSHMEM PE
   }
@@ -522,6 +528,7 @@ __device__ __forceinline__ int find_free(volatile envelope** envs) {
         //atomicCAS_block((int*)&idx, -1, i);
         atomicMin_block((int*)&idx, i);
       }
+      __threadfence();
     }
   }
   __syncthreads();
@@ -534,17 +541,17 @@ __device__ void charm::send_msg(envelope* env, size_t offset, size_t msg_size, i
   int dst_pe_local = get_pe_local(dst_pe);
   if (get_pe_nvshmem(dst_pe) == s_mem[s_idx::my_pe_nvshmem]) {
     // Message local to this NVSHMEM PE
-    volatile envelope** dst_env = recv_env + LOCAL_MAX * c_n_sms * dst_pe_local
+    volatile envelope** dst_envs = recv_envs + LOCAL_MAX * c_n_sms * dst_pe_local
       + LOCAL_MAX * src_pe_local;
 
     // Find free message index
-    int free_idx = find_free(dst_env);
+    int free_idx = find_free(dst_envs);
 
     // Atomically store message address
     if (threadIdx.x == 0) {
       printf("!!! SM %d atomically storing message (env %p msgtype %d size %llu src PE %d) to SM %d at index %d\n",
           src_pe_local, env, env->type, env->size, env->src_pe, dst_pe_local, free_idx);
-      unsigned long long int ret = atomicCAS((unsigned long long int*)&dst_env[free_idx], 0,
+      unsigned long long int ret = atomicCAS((unsigned long long int*)&dst_envs[free_idx], 0,
           (unsigned long long int)env);
       assert(ret == 0);
     }

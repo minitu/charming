@@ -42,23 +42,8 @@ __device__ msgtype charm::process_msg(void* addr, ssize_t* processed_size,
   __syncthreads();
 
   chare_proxy_table& my_proxy_table = proxy_tables[blockIdx.x];
-  if (type == msgtype::create) {
-    // Creation message
-    create_msg* msg = (create_msg*)((char*)env + sizeof(envelope));
-    if (threadIdx.x == 0) {
-      PDEBUG("PE %d creation msg chare ID %d, n_local %d, n_total %d, "
-          "start idx %d, end idx %d\n", my_pe, msg->chare_id, msg->n_local,
-          msg->n_total, msg->start_idx, msg->end_idx);
-    }
 
-    chare_proxy_base*& chare_proxy = my_proxy_table.proxies[msg->chare_id];
-    char* map_ptr = (char*)msg + sizeof(create_msg);
-    char* obj_ptr = map_ptr + sizeof(int) * msg->n_total;
-
-    chare_proxy->create_local(msg->n_local, msg->n_total, msg->start_idx,
-        msg->end_idx, map_ptr, obj_ptr);
-
-  } else if (type == msgtype::regular || type == msgtype::user) {
+  if (type == msgtype::regular || type == msgtype::user) {
     // Regular message (including user message)
     regular_msg* msg = (regular_msg*)((char*)env + sizeof(envelope));
     if (threadIdx.x == 0) {
@@ -120,9 +105,6 @@ __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
   comm* c = (comm*)(s_mem + SMEM_CNT_MAX);
 
   if (threadIdx.x == 0) {
-    // Register user chares and entry methods
-    register_chares();
-
     // Initialize comm module
     c->init();
 
@@ -130,6 +112,9 @@ __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
     s_mem[s_idx::my_pe] = c_my_dev * c_n_sms + blockIdx.x; // CharminG PE
     s_mem[s_idx::my_pe_node] = c_my_dev_node * c_n_sms + blockIdx.x; // CharminG PE rank on physical node
     s_mem[s_idx::my_pe_nvshmem] = s_mem[s_idx::my_pe] / c_n_sms; // NVSHMEM PE
+
+    // Create user chares and register entry methods
+    create_chares();
   }
   __syncthreads();
 
@@ -155,8 +140,6 @@ __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
   // Loop until termination
   do {
     loop(c);
-    __nanosleep(1e6);
-    //printf("@@@ PE %d loop\n", my_pe);
   } while (!c->do_term_flag);
 
   // Global synchronization

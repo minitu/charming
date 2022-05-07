@@ -6,8 +6,8 @@
 #include "message.h"
 #include "kernel.h"
 
-// Maximum number of chare types
-#define CHARE_TYPE_CNT_MAX 1024
+#define CHARE_TYPE_CNT_MAX 1024 // Maximum number of chare types
+#define EM_CNT_MAX 128 // Maximum number of entry methods per chare
 
 // GPU constant memory
 extern __constant__ int c_n_pes;
@@ -24,9 +24,11 @@ struct chare {
   __device__ chare() : i(-1), n(0) {}
 
   // Packing/unpacking functions to be overloaded by the user
+  /*
   __device__ size_t pack_size() { return 0; }
   __device__ void pack(void* ptr) {}
   __device__ void unpack(void* ptr) {}
+  */
 };
 
 template <class C>
@@ -43,8 +45,6 @@ struct chare_proxy_base {
   int id;
 
   __device__ chare_proxy_base() {}
-  __device__ virtual void create_local(int n_local, int n_total, int start_idx,
-      int end_idx, void* map_ptr, void* obj_ptr) = 0;
   __device__ virtual void call(int idx, int ep, void* arg) = 0;
 };
 
@@ -77,7 +77,7 @@ struct chare_proxy : chare_proxy_base {
   entry_method_base<C>** entry_methods; // Entry methods
   int em_count; // Number of registered entry methods
 
-  __device__ chare_proxy(int n_em)
+  __device__ chare_proxy()
     : objects(nullptr), n_local(0), n_total(0), start_idx(-1), end_idx(-1),
       loc_map(nullptr), entry_methods(nullptr), em_count(0) {
     // Store this proxy for the runtime
@@ -87,7 +87,7 @@ struct chare_proxy : chare_proxy_base {
     my_proxy_table.proxies[id] = this;
 
     // Allocate entry method table
-    entry_methods = new entry_method_base<C>*[n_em];
+    entry_methods = new entry_method_base<C>*[EM_CNT_MAX];
   }
 
   // Add entry method to table
@@ -96,135 +96,50 @@ struct chare_proxy : chare_proxy_base {
     entry_methods[em_count++] = new entry_method<C, Func>();
   }
 
-  // Create local chares
-  __device__ virtual void create_local(int n_local_, int n_total_, int start_idx_,
-      int end_idx_, void* map_ptr, void* obj_ptr) {
-    // Store information and create local chares
-    if (threadIdx.x == 0) {
-      n_local = n_local_;
-      n_total = n_total_;
-      objects = (n_local > 0) ? new C*[n_local] : nullptr;
-      start_idx = start_idx_;
-      end_idx = end_idx_;
-
-      // Create chares and unpack
-      // Make chare index and number of chares accessible to the user
-      for (int idx = 0; idx < n_local; idx++) {
-        objects[idx] = new C;
-        objects[idx]->unpack(obj_ptr);
-        objects[idx]->i = start_idx + idx;
-        objects[idx]->n = n_total;
-      }
-    }
-    __syncthreads();
-
-    // On PEs other than 0, create location map using data from creation message
-    if (map_ptr) {
-      if (threadIdx.x == 0) {
-        loc_map = new int[n_total];
-        s_mem[s_idx::dst] = (uint64_t)loc_map;
-        s_mem[s_idx::src] = (uint64_t)map_ptr;
-        s_mem[s_idx::size] = (uint64_t)(sizeof(int) * n_total);
-      }
-      __syncthreads();
-      memcpy_kernel((void*)s_mem[s_idx::dst], (void*)s_mem[s_idx::src],
-          (size_t)s_mem[s_idx::size]);
-    }
-  }
-
-  // Only called on PE 0
-  // FIXME: Currently only block mapping
-  __device__ void create(C& obj, int n) {
-    // Divide the chares across all PEs
+  // Called on all PEs before main (single-threaded)
+  __device__ void create(int n_chares) {
     int n_pes = c_n_pes;
     int my_pe = s_mem[s_idx::my_pe];
-    int n_per_pe = n / n_pes;
-    int rem = n % n_pes;
+    int n_chares_pe = n_chares / n_pes;
+    int rem = n_chares % n_pes;
 
-    // Create chare-PE location map
-    if (threadIdx.x == 0) {
-      loc_map = new int[n];
-    }
-    __syncthreads();
-    int n_this = -1;
-    int start_idx_ = 0;
-    int end_idx_ = 0;
+    // Allocate space for location map
+    loc_map = new int[n_chares];
+
+    // Block mapping
+    int n_chares_cur = -1;
+    int start = 0;
+    int end = 0;
     for (int pe = 0; pe < n_pes; pe++) {
-      // Figure out number of chares for this PE
-      n_this = n_per_pe;
-      if (pe < rem) n_this++;
+      // Calculate number of chares for this PE
+      n_chares_cur = n_chares_pe;
+      if (pe < rem) n_chares_cur++;
 
       // Update end chare index
-      end_idx_ = start_idx_ + n_this - 1;
+      end = start + n_chares_cur - 1;
+
+      // Store info for my PE and create local chare objects
+      if (pe == my_pe) {
+        n_local = n_chares_cur;
+        n_total = n_chares;
+        start_idx = start;
+        end_idx = end;
+
+        objects = (n_local > 0) ? new C*[n_local] : nullptr;
+        for (int idx = 0; idx < n_local; idx++) {
+          objects[idx] = new C;
+          objects[idx]->i = start_idx + idx;
+          objects[idx]->n = n_total;
+        }
+      }
 
       // Fill in location map
-      if (threadIdx.x == 0) {
-        for (int i = start_idx_; i <= end_idx_; i++) {
-          loc_map[i] = pe;
-        }
+      for (int i = start; i <= end; i++) {
+        loc_map[i] = pe;
       }
 
       // Update start chare index
-      start_idx_ += n_this;
-      __syncthreads();
-    }
-
-    // Create chares
-    // FIXME: Code duplication with above
-    n_this = -1;
-    start_idx_ = 0;
-    end_idx_ = 0;
-    for (int pe = 0; pe < n_pes; pe++) {
-      // Figure out number of chares for this PE
-      n_this = n_per_pe;
-      if (pe < rem) n_this++;
-
-      // Update end chare index
-      end_idx_ = start_idx_ + n_this - 1;
-
-      if (pe == my_pe) {
-        // Create chares for this PE
-        create_local(n_this, n, start_idx_, end_idx_, nullptr, &obj);
-      } else {
-        if (threadIdx.x == 0) {
-          // Send creation messages to all other PEs
-          // Payload includes location map and packed seed object
-          size_t map_size = sizeof(int) * n;
-          size_t obj_size = obj.pack_size();
-          size_t payload_size = map_size + obj_size;
-          size_t msg_size = envelope::alloc_size(sizeof(create_msg) + payload_size);
-
-          // Create message
-          envelope* env = create_envelope(msgtype::create, msg_size,
-              (size_t*)&s_mem[s_idx::offset], pe);
-          create_msg* msg = new ((char*)env + sizeof(envelope)) create_msg(id, n_this, n, start_idx_, end_idx_);
-          printf("!!! env: %p, creation msg chare ID %d n_local %d n_total %d start_idx %d end_idx %d\n",
-              env, msg->chare_id, msg->n_local, msg->n_total, msg->start_idx, msg->end_idx);
-          s_mem[s_idx::env] = (uint64_t)env;
-          s_mem[s_idx::msg_size] = (uint64_t)msg_size;
-
-          // Prepare memcpy and pack seed object
-          char* start = (char*)msg + sizeof(create_msg);
-          s_mem[s_idx::dst] = (uint64_t)start;
-          s_mem[s_idx::src] = (uint64_t)loc_map;
-          s_mem[s_idx::size] = (uint64_t)map_size;
-          start += map_size;
-          obj.pack(start);
-        }
-        __syncthreads();
-
-        // Copy message content
-        memcpy_kernel((void*)s_mem[s_idx::dst], (void*)s_mem[s_idx::src],
-            (size_t)s_mem[s_idx::size]);
-
-        // Send creation message to target PE
-        send_msg((envelope*)s_mem[s_idx::env], (size_t)s_mem[s_idx::offset],
-            (size_t)s_mem[s_idx::msg_size], pe);
-      }
-
-      // Update start chare index
-      start_idx_ += n_this;
-      __syncthreads();
+      start += n_chares_cur;
     }
   }
 
@@ -233,7 +148,6 @@ struct chare_proxy : chare_proxy_base {
     (*(entry_methods[ep]))(*(objects[idx - start_idx]), arg);
   }
 
-  // Note: Chare should have been already created at this PE via a creation message
   inline __device__ void invoke(int idx, int ep) { invoke(idx, ep, nullptr, 0); }
   inline __device__ void invoke(int idx, int ep, void* buf, size_t size) {
     send_reg_msg(id, idx, ep, buf, size, loc_map[idx]);

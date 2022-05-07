@@ -3,11 +3,12 @@
 
 __shared__ charm::chare_proxy<Comm>* comm_proxy;
 
-__device__ void charm::register_chares() {
-  comm_proxy = new charm::chare_proxy<Comm>(3);
+__device__ void charm::create_chares() {
+  comm_proxy = new charm::chare_proxy<Comm>();
   comm_proxy->add_entry_method<&entry_init>();
   comm_proxy->add_entry_method<&entry_init_done>();
   comm_proxy->add_entry_method<&entry_recv>();
+  comm_proxy->create(2);
 }
 
 __device__ void Comm::init(void* arg) {
@@ -174,7 +175,5 @@ __device__ void charm::main(int argc, char** argv, size_t* argvs) {
   }
   __syncthreads();
 
-  Comm comm;
-  comm_proxy->create(comm, 2);
   comm_proxy->invoke_all(0, params, sizeof(size_t) * n_params);
 }
