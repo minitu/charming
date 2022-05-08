@@ -54,9 +54,9 @@ int main(int argc, char* argv[]) {
   // Execution environment
   cudaDeviceProp prop;
   cudaGetDeviceProperties(&prop, 0);
-  int max_threads_tb = prop.maxThreadsPerBlock;
-  //int h_n_sms = prop.multiProcessorCount;
-  int h_n_sms = 2;
+  //int max_threads_tb = prop.maxThreadsPerBlock;
+  int h_n_sms = prop.multiProcessorCount;
+  //int h_n_sms = 1;
   int h_my_dev = nvshmem_my_pe();
   int h_my_dev_node = nvshmem_team_my_pe(NVSHMEMX_TEAM_NODE);
   int h_n_devs = nvshmem_n_pes();
@@ -198,6 +198,15 @@ int main(int argc, char* argv[]) {
 __device__ void charm::end() {
   // TODO: Check if begin_terminate message has already been sent from this PE
   send_term_msg(true, 0);
+}
+
+__device__ void charm::abort() {
+  // Abort currently running PE
+  if (threadIdx.x == 0) {
+    comm* c = (comm*)(s_mem + SMEM_CNT_MAX);
+    c->do_term_flag = true;
+  }
+  __syncthreads();
 }
 
 __device__ int charm::my_pe() { return s_mem[s_idx::my_pe]; }

@@ -5,11 +5,22 @@
 
 namespace charm {
 
+// Message types
 enum class msgtype : int {
   regular,
   begin_terminate,
   do_terminate,
   user
+};
+
+// Regular message header between chares
+struct alignas(ALIGN_SIZE) regular_msg {
+  alignas(ALIGN_SIZE) int chare_id;
+  alignas(ALIGN_SIZE) int chare_idx;
+  alignas(ALIGN_SIZE) int ep_id;
+
+  __device__ regular_msg(int chare_id_, int chare_idx_, int ep_id_)
+    : chare_id(chare_id_), chare_idx(chare_idx_), ep_id(ep_id_) {}
 };
 
 // TODO: Is alignment too aggressive? Otherwise we observe segfaults
@@ -21,9 +32,15 @@ struct alignas(ALIGN_SIZE) envelope {
   __device__ envelope(msgtype type_, size_t size_, int src_pe_)
     : type(type_), size(size_), src_pe(src_pe_) {}
 
-  inline static __device__ size_t alloc_size(size_t size_) {
+  // Determine total size of message for memory allocation
+  inline static __device__ size_t alloc_size(msgtype type, size_t payload_size) {
+    size_t type_size = 0;
+    if (type == msgtype::regular || type == msgtype::user) {
+      type_size += sizeof(regular_msg);
+    }
+
     // Need to satisfy alignment
-    size_t s = sizeof(envelope) + size_;
+    size_t s = sizeof(envelope) + type_size + payload_size;
     size_t rem = s % ALIGN_SIZE;
     if (rem != 0) s = s + ALIGN_SIZE - rem;
 
@@ -31,7 +48,7 @@ struct alignas(ALIGN_SIZE) envelope {
   }
 };
 
-// Message structure for the user
+// User Message API
 struct alignas(ALIGN_SIZE) message {
   envelope* env;
   size_t offset;
@@ -44,19 +61,9 @@ struct alignas(ALIGN_SIZE) message {
   */
 };
 
-struct alignas(ALIGN_SIZE) regular_msg {
-  alignas(ALIGN_SIZE) int chare_id;
-  alignas(ALIGN_SIZE) int chare_idx;
-  alignas(ALIGN_SIZE) int ep_id;
-
-  __device__ regular_msg(int chare_id_, int chare_idx_, int ep_id_)
-    : chare_id(chare_id_), chare_idx(chare_idx_), ep_id(ep_id_) {}
-};
-
 __device__ envelope* create_envelope(msgtype type, size_t msg_size,
     size_t* offset, int dst_pe);
-__device__ void send_msg(envelope* env, size_t offset, size_t msg_size,
-    int dst_pe);
+__device__ void send_msg(envelope* env, size_t offset, int dst_pe);
 __device__ void send_reg_msg(int chare_id, int chare_idx, int ep_id, void* buf,
     size_t payload_size, int dst_pe);
 __device__ void send_user_msg(int chare_id, int chare_idx, int ep_id,

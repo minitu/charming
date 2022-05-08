@@ -494,9 +494,10 @@ __device__ void charm::message::free() {
 */
 
 // Single-threaded
-__device__ envelope* charm::create_envelope(msgtype type, size_t msg_size,
+__device__ envelope* charm::create_envelope(msgtype type, size_t payload_size,
     size_t* offset, int dst_pe) {
   envelope* env = nullptr;
+  size_t msg_size = envelope::alloc_size(type, payload_size);
 
   int dst_pe_nvshmem = get_pe_nvshmem(dst_pe);
   if (dst_pe_nvshmem == s_mem[s_idx::my_pe_nvshmem]) {
@@ -546,7 +547,7 @@ __device__ __forceinline__ int find_free(volatile envelope** envs) {
   return idx;
 }
 
-__device__ void charm::send_msg(envelope* env, size_t offset, size_t msg_size, int dst_pe) {
+__device__ void charm::send_msg(envelope* env, size_t offset, int dst_pe) {
   int src_pe_local = get_pe_local(s_mem[s_idx::my_pe]);
   int dst_pe_local = get_pe_local(dst_pe);
   if (get_pe_nvshmem(dst_pe) == s_mem[s_idx::my_pe_nvshmem]) {
@@ -583,9 +584,9 @@ __device__ void charm::send_msg(envelope* env, size_t offset, size_t msg_size, i
       PERROR("Out of space in local composite queue\n");
       assert(false);
     }
-    *(composite_t*)my_recv_local_comp->addr(local_offset) = composite_t(offset, msg_size);
+    *(composite_t*)my_recv_local_comp->addr(local_offset) = composite_t(offset, env->size);
     PDEBUG("PE %d sending local message: offset %llu, local %lld, size %llu\n",
-        my_pe, offset, local_offset, msg_size);
+        my_pe, offset, local_offset, env->size);
   } else {
     // Sending message to a different PE
     // Obtain a message index for the target PE and set the corresponding used signal
@@ -604,12 +605,12 @@ __device__ void charm::send_msg(envelope* env, size_t offset, size_t msg_size, i
     size_t recv_offset = REMOTE_MSG_COUNT_MAX * my_pe;
     dst_recv_remote_comp += recv_offset;
     int dst_pe_nvshmem = dst_pe / c_n_sms;
-    composite_t src_composite(offset, msg_size);
+    composite_t src_composite(offset, env->size);
     nvshmemx_signal_op(dst_recv_remote_comp + msg_idx, src_composite.data,
         NVSHMEM_SIGNAL_SET, dst_pe_nvshmem);
     assert(msg_idx != SIZE_MAX);
     PDEBUG("PE %d sending message request: offset %llu, size %llu, dst PE %d, idx %llu\n",
-        my_pe, offset, msg_size, dst_pe, msg_idx);
+        my_pe, offset, env->size, dst_pe, msg_idx);
 
 #ifndef NO_CLEANUP
     // Store source composite for later cleanup
@@ -622,12 +623,12 @@ __device__ void charm::send_msg(envelope* env, size_t offset, size_t msg_size, i
 
 __device__ void charm::send_reg_msg(int chare_id, int chare_idx, int ep_id,
     void* buf, size_t payload_size, int dst_pe) {
+  cudatp_t start = cuda::std::chrono::system_clock::now();
+
   if (threadIdx.x == 0) {
-    size_t msg_size = envelope::alloc_size(sizeof(regular_msg) + payload_size);
-    envelope* env = create_envelope(msgtype::regular, msg_size,
+    envelope* env = create_envelope(msgtype::regular, payload_size,
         (size_t*)&s_mem[s_idx::offset], dst_pe);
     s_mem[s_idx::env] = (uint64_t)env;
-    s_mem[s_idx::msg_size] = (uint64_t)msg_size;
 
     regular_msg* msg = new ((char*)env + sizeof(envelope)) regular_msg(chare_id,
       chare_idx, ep_id);
@@ -640,18 +641,32 @@ __device__ void charm::send_reg_msg(int chare_id, int chare_idx, int ep_id,
   }
   __syncthreads();
 
+  cudatp_t mid1 = cuda::std::chrono::system_clock::now();
+  cudatp_dur_t dur1 = mid1 - start;
+
   // Fill in payload (from regular GPU memory to NVSHMEM symmetric memory)
   if (payload_size > 0) {
     memcpy_kernel((void*)s_mem[s_idx::dst], (void*)s_mem[s_idx::src],
         (size_t)s_mem[s_idx::size]);
   }
 
-  send_msg((envelope*)s_mem[s_idx::env], (size_t)s_mem[s_idx::offset],
-      (size_t)s_mem[s_idx::msg_size], dst_pe);
+  cudatp_t mid2 = cuda::std::chrono::system_clock::now();
+  cudatp_dur_t dur2 = mid2 - mid1;
+
+  send_msg((envelope*)s_mem[s_idx::env], (size_t)s_mem[s_idx::offset], dst_pe);
+
+  cudatp_t end = cuda::std::chrono::system_clock::now();
+  cudatp_dur_t dur3 = end - mid2;
+  cudatp_dur_t dur_total = end - start;
+  if (threadIdx.x == 0) {
+    printf("!!! send_reg_msg %.3lf us (create_envelope %.3lf us, memcpy_kernel %.3lf us, "
+        "send_msg %.3lf us)\n",
+        dur_total.count() * 1e6, dur1.count() * 1e6, dur2.count() * 1e6, dur3.count() * 1e6);
+  }
 }
 
 __device__ __forceinline__ void send_user_msg_common(int chare_id, int chare_idx,
-    int ep_id, const message& msg, size_t send_size, int dst_pe) {
+    int ep_id, const message& msg) {
   envelope* env = msg.env;
   if (threadIdx.x == 0) {
     // Set regular message fields using placement new
@@ -659,33 +674,30 @@ __device__ __forceinline__ void send_user_msg_common(int chare_id, int chare_idx
   }
   __syncthreads();
 
-  send_msg(env, msg.offset, send_size, dst_pe);
+  send_msg(env, msg.offset, msg.dst_pe);
 }
 
 __device__ void charm::send_user_msg(int chare_id, int chare_idx, int ep_id,
     const message& msg) {
-  send_user_msg_common(chare_id, chare_idx, ep_id, msg, msg.env->size, msg.dst_pe);
+  send_user_msg_common(chare_id, chare_idx, ep_id, msg);
 }
 
 __device__ void charm::send_user_msg(int chare_id, int chare_idx, int ep_id,
     const message& msg, size_t payload_size) {
   // Send size can be smaller than allocated message size
-  size_t send_size = envelope::alloc_size(sizeof(regular_msg) + payload_size);
+  msg.env->size = envelope::alloc_size(msgtype::user, payload_size);
 
-  send_user_msg_common(chare_id, chare_idx, ep_id, msg, send_size, msg.dst_pe);
+  send_user_msg_common(chare_id, chare_idx, ep_id, msg);
 }
 
 __device__ void charm::send_term_msg(bool begin, int dst_pe) {
   if (threadIdx.x == 0) {
-    size_t msg_size = envelope::alloc_size(0);
     envelope* env = create_envelope(
-        begin ? msgtype::begin_terminate : msgtype::do_terminate, msg_size,
+        begin ? msgtype::begin_terminate : msgtype::do_terminate, 0,
         (size_t*)&s_mem[s_idx::offset], dst_pe);
     s_mem[s_idx::env] = (uint64_t)env;
-    s_mem[s_idx::msg_size] = (uint64_t)msg_size;
   }
   __syncthreads();
 
-  send_msg((envelope*)s_mem[s_idx::env], (size_t)s_mem[s_idx::offset],
-      (size_t)s_mem[s_idx::msg_size], dst_pe);
+  send_msg((envelope*)s_mem[s_idx::env], (size_t)s_mem[s_idx::offset], dst_pe);
 }

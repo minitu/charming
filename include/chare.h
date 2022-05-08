@@ -164,11 +164,14 @@ struct chare_proxy : chare_proxy_base {
       invoke(i, ep, buf, size);
     }
   }
+  inline __device__ void invoke_local(int idx, int ep, void* buf, size_t size) {
+    chare_proxy_base*& chare_proxy = proxy_tables[blockIdx.x].proxies[id];
+    chare_proxy->call(idx, ep, buf);
+  }
 
   inline __device__ void alloc_msg(message& msg, int idx, size_t size) {
-    size_t msg_size = envelope::alloc_size(sizeof(regular_msg) + size);
     msg.dst_pe = loc_map[idx];
-    msg.env = create_envelope(msgtype::user, msg_size, &msg.offset, msg.dst_pe);
+    msg.env = create_envelope(msgtype::user, size, &msg.offset, msg.dst_pe);
   }
   inline __device__ void free_msg(message& msg) { /*TODO*/ }
 };
