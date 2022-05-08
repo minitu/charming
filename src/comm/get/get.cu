@@ -53,9 +53,7 @@ __device__ __managed__ size_t* recv_remote_comp_idx; // Global
 __device__ __managed__ composite_t* heap_buf; // Global
 __device__ __managed__ size_t heap_buf_size;
 */
-//__device__ __managed__ volatile envelope** recv_envs;
-envelope** d_recv_envs;
-__device__ volatile envelope** recv_envs;
+__device__ __managed__ volatile envelope** recv_envs;
 
 // GPU shared memory
 extern __shared__ uint64_t s_mem[];
@@ -69,13 +67,11 @@ enum {
 void charm::comm_init_host(int n_pes, int n_sms) {
   // Allocate memory
   size_t env_size = sizeof(envelope*) * LOCAL_MAX * n_sms * n_sms;
-  cudaMalloc(&d_recv_envs, env_size);
-  assert(d_recv_envs);
+  cudaMallocManaged(&recv_envs, env_size);
+  assert(recv_envs);
 
-  // Clear data structure and store its address in device
-  cudaMemsetAsync(d_recv_envs, 0, env_size, stream);
-  cudaMemcpyToSymbolAsync(recv_envs, &d_recv_envs, sizeof(envelope**), 0,
-      cudaMemcpyHostToDevice, stream);
+  // Clear data structure
+  cudaMemsetAsync(recv_envs, 0, env_size, stream);
   cudaStreamSynchronize(stream);
 
   /*
@@ -132,7 +128,7 @@ void charm::comm_init_host(int n_pes, int n_sms) {
 }
 
 void charm::comm_fini_host(int n_pes, int n_sms) {
-  cudaFree(d_recv_envs);
+  cudaFree(recv_envs);
 
   /*
   cudaFree(send_comp);
