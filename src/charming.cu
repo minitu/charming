@@ -179,6 +179,10 @@ int main(int argc, char* argv[]) {
   cuda_check_error();
   nvshmemx_barrier_all_on_stream(stream);
 
+  if (h_my_dev == 0) {
+    PINFO("Exiting CharminG\n");
+  }
+
   // Cleanup
   comm_fini_host(h_n_pes, h_n_sms);
   cudaFree(proxy_tables);

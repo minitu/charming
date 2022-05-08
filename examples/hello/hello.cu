@@ -3,10 +3,23 @@
 
 __shared__ charm::chare_proxy<Hello>* hello_proxy;
 
-__device__ void charm::register_chares() {
+__device__ void charm::create_chares(int argc, char** argv, size_t* argvs) {
   // Register Hello chare and its entry methods
-  hello_proxy = new charm::chare_proxy<Hello>(1);
-  hello_proxy->add_entry_method(&Hello::greet);
+  hello_proxy = new charm::chare_proxy<Hello>();
+  hello_proxy->add_entry_method<&entry_greet>();
+  hello_proxy->create(charm::n_pes() * 2);
+}
+
+__device__ void charm::main(int argc, char** argv, size_t* argvs) {
+  __shared__ int send_int;
+
+  if (threadIdx.x == 0) {
+    send_int = 0;
+  }
+  __syncthreads();
+
+  // Send integer to first chare
+  hello_proxy->invoke(0, 0, &send_int, sizeof(int));
 }
 
 __device__ void Hello::greet(void* arg) {
@@ -19,30 +32,13 @@ __device__ void Hello::greet(void* arg) {
   }
 
   if (i == n-1) {
-    if (threadIdx.x == 0) {
-      charm::end();
-    }
+    charm::end();
   } else {
     if (threadIdx.x == 0) {
       send_int = recv_int + 1;
     }
     __syncthreads();
+
     hello_proxy->invoke(i + 1, 0, &send_int, sizeof(int));
   }
-}
-
-// Main
-__device__ void charm::main(int argc, char** argv, size_t* argvs) {
-  __shared__ int send_int;
-  // Create and populate object that will become the basis of chares
-  Hello my_obj;
-
-  // Create chares using the data in my object
-  hello_proxy->create(my_obj, charm::n_pes() * 2);
-
-  // Invoke entry method
-  if (threadIdx.x == 0) {
-    send_int = 0;
-  }
-  hello_proxy->invoke(0, 0, &send_int, sizeof(int));
 }

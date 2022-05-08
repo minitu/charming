@@ -114,7 +114,7 @@ __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
     s_mem[s_idx::my_pe_nvshmem] = s_mem[s_idx::my_pe] / c_n_sms; // NVSHMEM PE
 
     // Create user chares and register entry methods
-    create_chares();
+    create_chares(argc, argv, argvs);
   }
   __syncthreads();
 

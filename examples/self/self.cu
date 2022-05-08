@@ -3,10 +3,37 @@
 
 __shared__ charm::chare_proxy<Comm>* comm_proxy;
 
-__device__ void charm::register_chares() {
-  comm_proxy = new charm::chare_proxy<Comm>(2);
+__device__ void charm::create_chares(int argc, char** argv, size_t* argvs) {
+  comm_proxy = new charm::chare_proxy<Comm>();
   comm_proxy->add_entry_method<&entry_init>();
   comm_proxy->add_entry_method<&entry_run>();
+  comm_proxy->create(1);
+}
+
+__device__ void charm::main(int argc, char** argv, size_t* argvs) {
+  constexpr int n_params = 4;
+  __shared__ size_t params[n_params];
+
+  if (threadIdx.x == 0) {
+    // Default parameters
+    params[0] = 1;
+    params[1] = 65536;
+    params[2] = 100;
+    params[3] = 10;
+
+    // Process command line arguments
+    if (argc >= 2) params[0] = charm::device_atoi(argv[1], argvs[1]);
+    if (argc >= 3) params[1] = charm::device_atoi(argv[2], argvs[2]);
+    if (argc >= 4) params[2] = charm::device_atoi(argv[3], argvs[3]);
+    if (argc >= 5) params[3] = charm::device_atoi(argv[4], argvs[4]);
+
+    printf("Pingpong\n");
+    printf("Size: %llu - %llu\n", params[0], params[1]);
+    printf("Iterations: %d (Warmup: %d)\n", (int)params[2], (int)params[3]);
+  }
+  __syncthreads();
+
+  comm_proxy->invoke_all(0, params, sizeof(size_t) * n_params);
 }
 
 __device__ void Comm::init(void* arg) {
@@ -100,33 +127,4 @@ __device__ void Comm::run(void* arg) {
     }
     __syncthreads();
   }
-}
-
-// Main
-__device__ void charm::main(int argc, char** argv, size_t* argvs) {
-  constexpr int n_params = 4;
-  __shared__ size_t params[n_params];
-
-  if (threadIdx.x == 0) {
-    // Default parameters
-    params[0] = 1;
-    params[1] = 65536;
-    params[2] = 100;
-    params[3] = 10;
-
-    // Process command line arguments
-    if (argc >= 2) params[0] = charm::device_atoi(argv[1], argvs[1]);
-    if (argc >= 3) params[1] = charm::device_atoi(argv[2], argvs[2]);
-    if (argc >= 4) params[2] = charm::device_atoi(argv[3], argvs[3]);
-    if (argc >= 5) params[3] = charm::device_atoi(argv[4], argvs[4]);
-
-    printf("Pingpong\n");
-    printf("Size: %llu - %llu\n", params[0], params[1]);
-    printf("Iterations: %d (Warmup: %d)\n", (int)params[2], (int)params[3]);
-  }
-  __syncthreads();
-
-  Comm comm;
-  comm_proxy->create(comm, 1);
-  comm_proxy->invoke_all(0, params, sizeof(size_t) * n_params);
 }
