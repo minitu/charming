@@ -2,19 +2,13 @@
 #include <nvshmem.h>
 #include <cassert>
 
-__host__ void ringbuf_t::init(size_t size) {
+__host__ void ringbuf_t::init(void* ptr, size_t size, int my_sm) {
+  base = ptr;
+  start_offset = size * my_sm;
   space = size;
   write = 0;
   end = UINT64_MAX;
   read = 0;
-
-  // Allocate NVSHMEM memory
-  ptr = nvshmem_malloc(space);
-  assert(ptr);
-}
-
-__host__ void ringbuf_t::fini() {
-  nvshmem_free(ptr);
 }
 
 __device__ ringbuf_off_t ringbuf_t::acquire(size_t size) {
@@ -57,7 +51,7 @@ __device__ ringbuf_off_t ringbuf_t::acquire(size_t size) {
 #endif
   write = new_write;
 
-  return write_ret;
+  return start_offset + write_ret;
 }
 
 __device__ void ringbuf_t::release(size_t size) {
@@ -73,8 +67,9 @@ __device__ void ringbuf_t::release(size_t size) {
 }
 
 __device__ void ringbuf_t::print() {
-  printf("[ringbuf_t] ptr: %p, space: %llu, end: %llu, write: %lld, read: %lld\n",
-      ptr, space, end, write, read);
+  printf("[ringbuf_t] base: %p, start_offset: %llu, space: %llu, end: %llu, "
+      "write: %lld, read: %lld\n",
+      base, start_offset, space, end, write, read);
 }
 
 __host__ void compbuf_t::init(size_t max_) {

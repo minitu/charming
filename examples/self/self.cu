@@ -27,7 +27,7 @@ __device__ void charm::main(int argc, char** argv, size_t* argvs) {
     if (argc >= 4) params[2] = charm::device_atoi(argv[3], argvs[3]);
     if (argc >= 5) params[3] = charm::device_atoi(argv[4], argvs[4]);
 
-    printf("Pingpong\n");
+    printf("Self messaging\n");
     printf("Size: %llu - %llu\n", params[0], params[1]);
     printf("Iterations: %d (Warmup: %d)\n", (int)params[2], (int)params[3]);
   }
@@ -56,14 +56,11 @@ __device__ void Comm::init(void* arg) {
 
     index = charm::chare::i;
     self = 0;
-#ifdef MEASURE_INVOKE
-    invoke_time = 0;
-#endif
     printf("Chare %d init\n", index);
   }
   __syncthreads();
 
-  run(nullptr);
+  comm_proxy->invoke(self, 1, data, cur_size);
 }
 
 __device__ void Comm::run(void* arg) {
@@ -92,11 +89,6 @@ __device__ void Comm::run(void* arg) {
 #ifdef DEBUG
       printf("Index %d iter %d size %lu\n", index, iter, cur_size);
 #endif
-#ifdef MEASURE_INVOKE
-      if (iter >= warmup) {
-        invoke_start_tp = cuda::std::chrono::system_clock::now();
-      }
-#endif
     }
   }
   __syncthreads();
@@ -111,18 +103,6 @@ __device__ void Comm::run(void* arg) {
 #endif
 
     if (threadIdx.x == 0) {
-#ifdef MEASURE_INVOKE
-      if (iter >= warmup) {
-        invoke_end_tp = cuda::std::chrono::system_clock::now();
-        cuda::std::chrono::duration<double> diff = invoke_end_tp - invoke_start_tp;
-        invoke_time += diff.count();
-      }
-      if (iter == n_iters + warmup - 1) {
-        printf("Time per invoke: %.3lf us\n", invoke_time / n_iters * 1000000);
-        invoke_time = 0;
-      }
-#endif
-
       iter++;
     }
     __syncthreads();

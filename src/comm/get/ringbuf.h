@@ -8,7 +8,8 @@ typedef int64_t compbuf_off_t;
 
 // Single producer & consumer (same PE) ring buffer
 struct ringbuf_t {
-  void* ptr; // Address of ring buffer
+  void* base; // Base address of ring buffer
+  ringbuf_off_t start_offset; // Starting offset of this SM
 
   size_t space;
   ringbuf_off_t end;
@@ -16,13 +17,12 @@ struct ringbuf_t {
   ringbuf_off_t write;
   ringbuf_off_t read;
 
-  __host__ void init(size_t size);
-  __host__ void fini();
+  __host__ void init(void* ptr, size_t size, int my_sm);
   __device__ ringbuf_off_t acquire(size_t size);
   __device__ void release(size_t size);
   __device__ void print();
   __device__ void* addr(ringbuf_off_t offset) {
-    return (void*)((char*)ptr + offset);
+    return (void*)((char*)base + offset);
   }
 };
 
