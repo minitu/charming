@@ -342,7 +342,11 @@ __device__ void charm::comm::process_local() {
       int clup_idx = msg_idx % LOCAL_MAX;
       volatile int* src_send_status = send_status + LOCAL_MAX * c_n_sms * src_pe_local
         + LOCAL_MAX * dst_pe_local;
+#ifdef NO_CLEANUP
+      int ret = atomicCAS((int*)&src_send_status[clup_idx], SIGNAL_USED, SIGNAL_FREE);
+#else
       int ret = atomicCAS((int*)&src_send_status[clup_idx], SIGNAL_USED, SIGNAL_CLUP);
+#endif
       assert(ret == SIGNAL_USED);
     }
     __syncthreads();
@@ -503,6 +507,7 @@ __device__ void charm::comm::process_remote() {
 }
 
 __device__ void charm::comm::cleanup() {
+#ifndef NO_CLEANUP
   // Cleanup using min-heap
   int src_pe_local = blockIdx.x;
   volatile int* src_send_status = send_status + LOCAL_MAX * c_n_sms * src_pe_local;
@@ -544,6 +549,7 @@ __device__ void charm::comm::cleanup() {
     }
   }
   __syncthreads();
+#endif
 
   /*
 #ifndef NO_CLEANUP
