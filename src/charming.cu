@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <string>
 #include <string.h>
 #include <cuda.h>
 #ifdef CHARMING_USE_MPI
@@ -13,6 +14,8 @@
 #include "comm.h"
 #include "scheduler.h"
 #include "util.h"
+
+#define NVSHMEM_MAX_SIZE 2147483648
 
 using namespace charm;
 
@@ -35,6 +38,11 @@ __device__ __managed__ chare_proxy_table* proxy_tables;
 extern __shared__ uint64_t s_mem[];
 
 int main(int argc, char* argv[]) {
+  // Increase maximum NVSHMEM memory size
+  std::string env_str = "NVSHMEM_SYMMETRIC_SIZE=";
+  env_str += std::to_string(NVSHMEM_MAX_SIZE);
+  putenv(const_cast<char*>(env_str.c_str()));
+
   // Initialize NVSHMEM (and MPI if needed)
 #ifdef CHARMING_USE_MPI
   MPI_Init(&argc, &argv);
