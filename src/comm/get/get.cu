@@ -513,13 +513,14 @@ __device__ void charm::comm::cleanup() {
     size_t clup_offset;
     size_t clup_size;
     ringbuf_t* my_mbuf = mbuf + blockIdx.x;
+    // Clean up as many messages as possible
     while (true) {
       top = addr_heap.top();
       if (top.data == UINT64_MAX) break;
 
       clup_offset = top.offset();
       clup_size = top.size();
-      if (clup_offset == my_mbuf->start_offset + my_mbuf->read && clup_size > 0) {
+      if ((clup_offset == my_mbuf->start_offset + my_mbuf->read) && clup_size > 0) {
         my_mbuf->release(clup_size);
         addr_heap.pop();
         PDEBUG("PE %d (SM %d) releasing message: offset %llu, size %llu\n",
@@ -610,7 +611,7 @@ __device__ void charm::message::free() {
 
 // Single-threaded
 __device__ envelope* charm::create_envelope(msgtype type, size_t payload_size,
-    size_t* offset, int dst_pe) {
+    size_t& offset, int dst_pe) {
   size_t msg_size = envelope::alloc_size(type, payload_size);
 
   /*
@@ -632,16 +633,15 @@ __device__ envelope* charm::create_envelope(msgtype type, size_t payload_size,
   // Reserve space for this message in message buffer
   int my_pe = s_mem[s_idx::my_pe];
   ringbuf_t* my_mbuf = mbuf + blockIdx.x;
-  ringbuf_off_t mbuf_off = my_mbuf->acquire(msg_size);
-  if (mbuf_off == -1) {
+  bool success = my_mbuf->acquire(msg_size, offset);
+  if (!success) {
     PERROR("PE %d: Not enough space in message buffer\n", my_pe);
     assert(false);
   }
   PDEBUG("PE %d acquired message: offset %llu, size %llu\n", my_pe, mbuf_off, msg_size);
-  *offset = mbuf_off;
 
   // Create envelope
-  return new (my_mbuf->addr(mbuf_off)) envelope(type, msg_size, my_pe);
+  return new (my_mbuf->addr(offset)) envelope(type, msg_size, my_pe);
 }
 
 
@@ -735,7 +735,7 @@ __device__ void charm::send_reg_msg(int chare_id, int chare_idx, int ep_id,
 
   if (threadIdx.x == 0) {
     envelope* env = create_envelope(msgtype::regular, payload_size,
-        (size_t*)&s_mem[s_idx::offset], dst_pe);
+        (size_t&)s_mem[s_idx::offset], dst_pe);
     s_mem[s_idx::env] = (uint64_t)env;
 
     regular_msg* msg = new ((char*)env + sizeof(envelope)) regular_msg(chare_id,
@@ -808,7 +808,7 @@ __device__ void charm::send_term_msg(bool begin, int dst_pe) {
   if (threadIdx.x == 0) {
     envelope* env = create_envelope(
         begin ? msgtype::begin_terminate : msgtype::do_terminate, 0,
-        (size_t*)&s_mem[s_idx::offset], dst_pe);
+        (size_t&)s_mem[s_idx::offset], dst_pe);
     s_mem[s_idx::env] = (uint64_t)env;
   }
   __syncthreads();

@@ -6,43 +6,46 @@ __host__ void ringbuf_t::init(void* ptr, size_t size, int my_sm) {
   base = ptr;
   start_offset = size * my_sm;
   space = size;
+  read_end = UINT64_MAX;
   write = 0;
-  end = UINT64_MAX;
   read = 0;
 }
 
-__device__ ringbuf_off_t ringbuf_t::acquire(size_t size) {
-#ifdef DEBUG
-  assert(write < space);
-#endif
-
+__device__ bool ringbuf_t::acquire(size_t size, size_t& ret_offset) {
   // Compute potential new write offset
-  ringbuf_off_t new_write = write + size;
+  size_t new_write = write + size;
   if (write < read && new_write >= read) {
-    // Next should not catch up to read
-    return -1;
+    // Write should never catch up to read
+    return false;
   }
 
-  ringbuf_off_t write_ret = write;
+  size_t write_ret = write;
   if (new_write >= space) {
     // Need to Wrap-around
+#ifdef DEBUG
+    assert(read <= write);
+    assert(read_end == UINT64_MAX);
+#endif
+    read_end = write;
     const bool exceed = new_write > space;
     if (exceed) {
       // Early wrap-around
-#ifdef DEBUG
-      assert(read <= write);
-      assert(end == UINT64_MAX);
-#endif
-      end = write;
       new_write = size;
       write_ret = 0;
     } else {
       // Exact wrap-around
       new_write = 0;
     }
+
+    // New write should never catch up to read
     if (new_write >= read) {
-      return -1;
+      return false;
     }
+  }
+
+  // If read is already at the end, move to beginning
+  if (read == read_end) {
+    read = 0;
   }
 
   // Update write value
@@ -51,25 +54,28 @@ __device__ ringbuf_off_t ringbuf_t::acquire(size_t size) {
 #endif
   write = new_write;
 
-  return start_offset + write_ret;
+  // Prepare return offset
+  ret_offset = start_offset + write_ret;
+
+  return true;
 }
 
 __device__ void ringbuf_t::release(size_t size) {
 #ifdef DEBUG
   assert((read <= write && (read + size <= write))
-      || (read > write && (read + size <= end)));
+      || (read > write && (read + size <= read_end)));
 #endif
   read += size;
-  if (read == end) {
-    end = UINT64_MAX;
+  if (read == read_end) {
+    read_end = UINT64_MAX;
     read = 0;
   }
 }
 
 __device__ void ringbuf_t::print() {
-  printf("[ringbuf_t] base: %p, start_offset: %llu, space: %llu, end: %llu, "
+  printf("[ringbuf_t] base: %p, start_offset: %llu, space: %llu, read_end: %llu, "
       "write: %lld, read: %lld\n",
-      base, start_offset, space, end, write, read);
+      base, start_offset, space, read_end, write, read);
 }
 
 __host__ void compbuf_t::init(size_t max_) {
