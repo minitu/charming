@@ -11,14 +11,14 @@ struct ringbuf_t {
   size_t start_offset; // Starting offset of this SM
 
   size_t space;
-  size_t read_end;
+  size_t watermark;
 
   size_t write;
   size_t read;
 
   __host__ void init(void* ptr, size_t size, int my_sm);
   __device__ bool acquire(size_t size, size_t& ret_offset);
-  __device__ void release(size_t size);
+  __device__ bool release(size_t size);
   __device__ void print();
   __device__ void* addr(size_t offset) {
     return (void*)((char*)base + offset);

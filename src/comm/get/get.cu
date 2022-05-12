@@ -16,6 +16,9 @@
 // Use custom thread block extensions to NVSHMEM
 #define NVSHMEM_BLOCK_IMPL
 
+#define MBUF_LOCAL_SIZE 8388608 // 8MB per SM
+#define MBUF_REMOTE_SIZE 1073741824 // 1GB per GPU
+
 /*
 // Maximum number of messages that are allowed to be in flight per pair of PEs
 #define REMOTE_MSG_COUNT_MAX 4
@@ -52,8 +55,10 @@ __device__ __managed__ size_t* recv_remote_comp_idx; // Global
 __device__ __managed__ composite_t* heap_buf; // Global
 __device__ __managed__ size_t heap_buf_size;
 */
-__managed__ void* nvshmem_buf; // NVSHMEM
-__managed__ ringbuf_t* mbuf; // Managed
+__managed__ void* nvshmem_buf_local; // NVSHMEM
+__managed__ void* nvshmem_buf_remote; // NVSHMEM
+__managed__ ringbuf_t* mbuf_local; // Managed
+__managed__ ringbuf_t* mbuf_remote; // Managed
 __managed__ volatile int* send_status; // Global
 __managed__ atomic64_t* send_comp; // Global
 __managed__ volatile atomic64_t* recv_comp; // Global
@@ -70,16 +75,18 @@ enum {
 
 void charm::comm_init_host(int n_pes, int n_sms) {
   // Allocate NVSHMEM message buffer
-  constexpr size_t mbuf_size = 8388608; // TODO: 8MB per SM
-  nvshmem_buf = nvshmem_malloc(mbuf_size * n_sms);
-  assert(nvshmem_buf);
-  cudaMallocManaged(&mbuf, sizeof(ringbuf_t) * n_sms);
-  assert(mbuf);
-  ringbuf_t* cur_mbuf = mbuf;
+  nvshmem_buf_local = nvshmem_malloc(MBUF_LOCAL_SIZE * n_sms);
+  nvshmem_buf_remote = nvshmem_malloc(MBUF_REMOTE_SIZE);
+  assert(nvshmem_buf_local && nvshmem_buf_remote);
+  cudaMallocManaged(&mbuf_local, sizeof(ringbuf_t) * n_sms);
+  cudaMallocManaged(&mbuf_remote, sizeof(ringbuf_t));
+  assert(mbuf_local && mbuf_remote);
+  ringbuf_t* cur_mbuf = mbuf_local;
   for (int i = 0; i < n_sms; i++) {
-    cur_mbuf->init(nvshmem_buf, mbuf_size, i);
+    cur_mbuf->init(nvshmem_buf_local, MBUF_LOCAL_SIZE, i);
     cur_mbuf++;
   }
+  mbuf_remote->init(nvshmem_buf_remote, MBUF_REMOTE_SIZE, n_sms-1);
 
   // Allocate data structures
   size_t count = LOCAL_MAX * n_sms * n_sms;
@@ -153,8 +160,10 @@ void charm::comm_init_host(int n_pes, int n_sms) {
 }
 
 void charm::comm_fini_host(int n_pes, int n_sms) {
-  nvshmem_free(nvshmem_buf);
-  cudaFree(mbuf);
+  nvshmem_free(nvshmem_buf_local);
+  nvshmem_free(nvshmem_buf_remote);
+  cudaFree(mbuf_local);
+  cudaFree(mbuf_remote);
   cudaFree((void*)send_status);
   cudaFree(send_comp);
   cudaFree((void*)recv_comp);
@@ -309,8 +318,8 @@ __device__ void charm::comm::process_local() {
   composite_t comp((uint64_t)find_msg_block(dst_recv_comp, msg_idx));
 
   if (comp.data) {
-    ringbuf_t* my_mbuf = mbuf + dst_pe_local;
-    envelope* env = (envelope*)my_mbuf->addr(comp.offset());
+    ringbuf_t* my_mbuf_local = mbuf_local + dst_pe_local;
+    envelope* env = (envelope*)my_mbuf_local->addr(comp.offset());
     if (threadIdx.x == 0) {
       PDEBUG("PE %d (SM %d) receiving local message (env %p, msgtype %d, size %llu) "
           "from PE %d (SM %d) at index %d\n",
@@ -512,7 +521,7 @@ __device__ void charm::comm::cleanup() {
     composite_t top;
     size_t clup_offset;
     size_t clup_size;
-    ringbuf_t* my_mbuf = mbuf + blockIdx.x;
+    ringbuf_t* my_mbuf_local = mbuf_local + blockIdx.x;
     // Clean up as many messages as possible
     while (true) {
       top = addr_heap.top();
@@ -520,8 +529,14 @@ __device__ void charm::comm::cleanup() {
 
       clup_offset = top.offset();
       clup_size = top.size();
-      if ((clup_offset == my_mbuf->start_offset + my_mbuf->read) && clup_size > 0) {
-        my_mbuf->release(clup_size);
+      if ((clup_offset == my_mbuf_local->start_offset + my_mbuf_local->read) && clup_size > 0) {
+        bool success = my_mbuf_local->release(clup_size);
+        if (!success) {
+          PERROR("PE %d: Failed to release message: offset %llu, size %llu\n",
+              (int)s_mem[s_idx::my_pe], clup_offset, clup_size);
+          my_mbuf_local->print();
+          assert(false);
+        }
         addr_heap.pop();
         PDEBUG("PE %d (SM %d) releasing message: offset %llu, size %llu\n",
             (int)s_mem[s_idx::my_pe], src_pe_local, clup_offset, clup_size);
@@ -632,18 +647,18 @@ __device__ envelope* charm::create_envelope(msgtype type, size_t payload_size,
 
   // Reserve space for this message in message buffer
   int my_pe = s_mem[s_idx::my_pe];
-  ringbuf_t* my_mbuf = mbuf + blockIdx.x;
-  bool success = my_mbuf->acquire(msg_size, offset);
+  ringbuf_t* my_mbuf_local = mbuf_local + blockIdx.x;
+  bool success = my_mbuf_local->acquire(msg_size, offset);
   if (!success) {
     PERROR("PE %d: Not enough space in message buffer\n", my_pe);
+    my_mbuf_local->print();
     assert(false);
   }
-  PDEBUG("PE %d acquired message: offset %llu, size %llu\n", my_pe, mbuf_off, msg_size);
+  PDEBUG("PE %d acquired message: offset %llu, size %llu\n", my_pe, offset, msg_size);
 
   // Create envelope
-  return new (my_mbuf->addr(offset)) envelope(type, msg_size, my_pe);
+  return new (my_mbuf_local->addr(offset)) envelope(type, msg_size, my_pe);
 }
-
 
 __device__ void charm::send_msg(envelope* env, size_t offset, int dst_pe) {
   int src_pe_local = blockIdx.x;

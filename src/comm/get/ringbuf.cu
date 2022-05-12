@@ -6,76 +6,67 @@ __host__ void ringbuf_t::init(void* ptr, size_t size, int my_sm) {
   base = ptr;
   start_offset = size * my_sm;
   space = size;
-  read_end = UINT64_MAX;
+  watermark = UINT64_MAX;
   write = 0;
   read = 0;
 }
 
 __device__ bool ringbuf_t::acquire(size_t size, size_t& ret_offset) {
   // Compute potential new write offset
+  size_t old_write = write;
   size_t new_write = write + size;
-  if (write < read && new_write >= read) {
-    // Write should never catch up to read
-    return false;
-  }
 
-  size_t write_ret = write;
-  if (new_write >= space) {
-    // Need to Wrap-around
-#ifdef DEBUG
-    assert(read <= write);
-    assert(read_end == UINT64_MAX);
-#endif
-    read_end = write;
-    const bool exceed = new_write > space;
-    if (exceed) {
-      // Early wrap-around
-      new_write = size;
-      write_ret = 0;
-    } else {
-      // Exact wrap-around
-      new_write = 0;
+  if (new_write <= space) {
+    // There is enough space
+    // Check if new write catches up to read
+    if (write < read && new_write >= read) {
+      return false;
     }
 
-    // New write should never catch up to read
+    write = new_write;
+    ret_offset = start_offset + old_write;
+  } else {
+    // Not enough space, need to wrap around
+    // Check if new write catches up to read
+    new_write = size;
     if (new_write >= read) {
       return false;
     }
+
+    // If read and write are at the same position when wrapping around,
+    // move read to beginning instead of setting watermark
+    if (write == read) {
+      read = 0;
+      watermark = UINT64_MAX;
+    } else {
+      watermark = write;
+    }
+    write = new_write;
+    ret_offset = start_offset;
   }
-
-  // If read is already at the end, move to beginning
-  if (read == read_end) {
-    read = 0;
-  }
-
-  // Update write value
-#ifdef DEBUG
-  assert(new_write <= space);
-#endif
-  write = new_write;
-
-  // Prepare return offset
-  ret_offset = start_offset + write_ret;
 
   return true;
 }
 
-__device__ void ringbuf_t::release(size_t size) {
-#ifdef DEBUG
-  assert((read <= write && (read + size <= write))
-      || (read > write && (read + size <= read_end)));
-#endif
-  read += size;
-  if (read == read_end) {
-    read_end = UINT64_MAX;
-    read = 0;
+__device__ bool ringbuf_t::release(size_t size) {
+  if ((read <= write && (read + size) > write)
+      || (read > write && (read + size) > watermark)) {
+    return false;
   }
+
+  read += size;
+  if (read == watermark) {
+    read = 0;
+    watermark = UINT64_MAX;
+  }
+
+  return true;
 }
 
 __device__ void ringbuf_t::print() {
-  printf("[ringbuf_t] base: %p, start_offset: %llu, space: %llu, read_end: %llu, "
+  printf("[ringbuf_t] base: %p, start_offset: %llu, space: %llu, watermark: %llu, "
       "write: %lld, read: %lld\n",
-      base, start_offset, space, read_end, write, read);
+      base, start_offset, space, watermark, write, read);
 }
 
 __host__ void compbuf_t::init(size_t max_) {
