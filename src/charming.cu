@@ -23,6 +23,8 @@ cudaStream_t stream;
 
 // GPU constant memory
 __constant__ int c_n_sms;
+__constant__ int c_n_clusters;;
+__constant__ int c_n_workers;
 __constant__ int c_my_dev;
 __constant__ int c_my_dev_node;
 __constant__ int c_n_devs;
@@ -65,24 +67,34 @@ int main(int argc, char* argv[]) {
   //int max_threads_tb = prop.maxThreadsPerBlock;
   int h_n_sms = prop.multiProcessorCount;
   //int h_n_sms = 1;
+  int h_n_clusters = 2;
+  int h_n_workers = (h_n_sms / h_n_clusters) - 1;
   int h_my_dev = nvshmem_my_pe();
   int h_my_dev_node = nvshmem_team_my_pe(NVSHMEMX_TEAM_NODE);
   int h_n_devs = nvshmem_n_pes();
   int h_n_devs_node = nvshmem_team_n_pes(NVSHMEMX_TEAM_NODE);
   int h_n_nodes = h_n_devs / h_n_devs_node;
-  int h_n_pes = h_n_devs * h_n_sms;
+  int h_n_pes = h_n_devs * h_n_clusters * h_n_workers;
   int h_n_pes_node = h_n_pes / h_n_nodes;
+
+  // Check if number of PE clusters is valid
+  if (h_n_sms % h_n_clusters != 0) {
+    if (h_my_dev == 0) {
+      PERROR("Number of PE clusters must be a factor of the number of SMs\n");
+    }
+    return -1;
+  }
 
   // Check for necessary CUDA functionalities
   if (!prop.cooperativeLaunch) {
     if (h_my_dev == 0) {
-      PERROR("Need support for CUDA Cooperative Groups");
+      PERROR("Need support for CUDA Cooperative Groups\n");
     }
     return -1;
   }
   if (!prop.managedMemory) {
     if (h_my_dev == 0) {
-      PERROR("Need support for CUDA Unified Memory");
+      PERROR("Need support for CUDA Unified Memory\n");
     }
     return -1;
   }
@@ -135,6 +147,8 @@ int main(int argc, char* argv[]) {
 
   // Transfer execution environment constants
   cudaMemcpyToSymbolAsync(c_n_sms, &h_n_sms, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(c_n_clusters, &h_n_clusters, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(c_n_workers, &h_n_workers, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(c_my_dev, &h_my_dev, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(c_my_dev_node, &h_my_dev_node, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(c_n_devs, &h_n_devs, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
@@ -167,6 +181,7 @@ int main(int argc, char* argv[]) {
   if (h_my_dev == 0) {
     PINFO("Initiating CharminG\n");
     PINFO("PEs: %d, GPU Devices: %d, Nodes: %d\n", h_n_pes, h_n_devs, h_n_nodes);
+    PINFO("PE Clusters: %d, Workers: %d\n", h_n_clusters, h_n_workers);
     PINFO("Thread grid: %d x %d x %d, Thread block: %d x %d x %d\n",
         grid_dim.x, grid_dim.y, grid_dim.z, block_dim.x, block_dim.y, block_dim.z);
     PINFO("Stack size: %llu Bytes, Heap size: %llu Bytes\n", stack_size, heap_size);
@@ -176,7 +191,7 @@ int main(int argc, char* argv[]) {
   }
 
   // Initialize communication module
-  comm_init_host(h_n_pes, h_n_sms);
+  comm_init_host(h_n_pes, h_n_sms, h_n_clusters);
   nvshmemx_barrier_all_on_stream(stream);
 
   // Launch scheduler kernel
@@ -192,7 +207,7 @@ int main(int argc, char* argv[]) {
   }
 
   // Cleanup
-  comm_fini_host(h_n_pes, h_n_sms);
+  comm_fini_host();
   cudaFree(proxy_tables);
   cudaStreamDestroy(stream);
   nvshmem_finalize();

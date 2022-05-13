@@ -10,7 +10,8 @@ enum class msgtype : int {
   regular,
   begin_terminate,
   do_terminate,
-  user
+  user,
+  request
 };
 
 // Regular message header between chares
@@ -21,6 +22,14 @@ struct alignas(ALIGN_SIZE) regular_msg {
 
   __device__ regular_msg(int chare_id_, int chare_idx_, int ep_id_)
     : chare_id(chare_id_), chare_idx(chare_idx_), ep_id(ep_id_) {}
+};
+
+// Request sent from worker TB to comm TB
+struct alignas(ALIGN_SIZE) request_msg : regular_msg {
+  alignas(ALIGN_SIZE) msgtype type;
+  alignas(ALIGN_SIZE) void* buf;
+  alignas(ALIGN_SIZE) size_t payload_size;
+  alignas(ALIGN_SIZE) int dst_pe;
 };
 
 // TODO: Is alignment too aggressive? Otherwise we observe segfaults
@@ -37,6 +46,8 @@ struct alignas(ALIGN_SIZE) envelope {
     size_t type_size = 0;
     if (type == msgtype::regular || type == msgtype::user) {
       type_size += sizeof(regular_msg);
+    } else if (type == msgtype::request) {
+      type_size += sizeof(request_msg);
     }
 
     // Need to satisfy alignment

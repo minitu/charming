@@ -2,9 +2,9 @@
 #include <nvshmem.h>
 #include <cassert>
 
-__host__ void ringbuf_t::init(void* ptr, size_t size, int my_sm) {
+__host__ void ringbuf_t::init(void* ptr, size_t size, int my_idx) {
   base = ptr;
-  start_offset = size * my_sm;
+  start_offset = size * my_idx;
   space = size;
   watermark = UINT64_MAX;
   write = 0;
