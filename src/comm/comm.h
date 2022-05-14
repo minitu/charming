@@ -14,7 +14,8 @@ void comm_fini_host();
 
 struct alignas(ALIGN_SIZE) comm {
 #if CHARMING_COMM_TYPE == 0
-  min_heap addr_heap;
+  min_heap addr_heap_local;
+  min_heap addr_heap_remote;
 #endif
 
   bool begin_term_flag;

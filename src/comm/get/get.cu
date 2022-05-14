@@ -36,6 +36,9 @@ extern cudaStream_t stream;
 
 // GPU constant memory
 extern __constant__ int c_n_sms;
+extern __constant__ int c_n_clusters_dev;
+extern __constant__ int c_n_pes_cluster;
+extern __constant__ int c_n_ces_cluster;
 extern __constant__ int c_my_dev;
 extern __constant__ int c_my_dev_node;
 extern __constant__ int c_n_devs;
@@ -74,13 +77,13 @@ enum {
   SIGNAL_CLUP = 2
 };
 
-void charm::comm_init_host(int n_pes, int n_sms, int n_clusters) {
+void charm::comm_init_host(int n_pes, int n_sms, int n_clusters_dev) {
   // Allocate NVSHMEM message buffers
   nvshmem_buf_local = nvshmem_malloc(MBUF_LOCAL_SIZE * n_sms);
-  nvshmem_buf_remote = nvshmem_malloc(MBUF_REMOTE_SIZE * n_clusters);
+  nvshmem_buf_remote = nvshmem_malloc(MBUF_REMOTE_SIZE * n_clusters_dev);
   assert(nvshmem_buf_local && nvshmem_buf_remote);
   cudaMallocManaged(&mbuf_local, sizeof(ringbuf_t) * n_sms);
-  cudaMallocManaged(&mbuf_remote, sizeof(ringbuf_t) * n_clusters);
+  cudaMallocManaged(&mbuf_remote, sizeof(ringbuf_t) * n_clusters_dev);
   assert(mbuf_local && mbuf_remote);
   ringbuf_t* cur_mbuf = mbuf_local;
   for (int i = 0; i < n_sms; i++) {
@@ -88,14 +91,14 @@ void charm::comm_init_host(int n_pes, int n_sms, int n_clusters) {
     cur_mbuf++;
   }
   cur_mbuf = mbuf_remote;
-  for (int i = 0; i < n_clusters; i++) {
+  for (int i = 0; i < n_clusters_dev; i++) {
     cur_mbuf->init(nvshmem_buf_remote, MBUF_REMOTE_SIZE, i);
     cur_mbuf++;
   }
 
   // Allocate data structures
   size_t local_count = LOCAL_MSG_MAX * n_sms * n_sms;
-  size_t remote_count = REMOTE_MSG_MAX * n_clusters * n_clusters;
+  size_t remote_count = REMOTE_MSG_MAX * n_clusters_dev * n_clusters_dev;
   size_t status_local_size = sizeof(int) * local_count;
   size_t status_remote_size = sizeof(int) * remote_count;
   size_t idx_size = sizeof(size_t) * remote_count;
@@ -131,58 +134,6 @@ void charm::comm_init_host(int n_pes, int n_sms, int n_clusters) {
   cudaMemsetAsync((void*)heap_buf_remote, 0, heap_remote_size, stream);
   cudaStreamSynchronize(stream);
   cuda_check_error();
-
-  /*
-  // Allocate message buffer
-  size_t mbuf_size = 8388608; // TODO
-  cudaMallocManaged(&mbuf, sizeof(ringbuf_t) * n_sms);
-  assert(mbuf);
-  ringbuf_t* cur_mbuf = mbuf;
-  for (int i = 0; i < n_sms; i++) {
-    cur_mbuf->init(mbuf_size);
-    cur_mbuf++;
-  }
-
-  // Allocate and prepare data structures
-  size_t status_size = REMOTE_MSG_COUNT_MAX * n_pes * n_sms * sizeof(uint64_t);
-  send_status = (uint64_t*)nvshmem_malloc(status_size);
-  assert(send_status);
-
-  size_t remote_comp_size = status_size;
-  recv_remote_comp = (uint64_t*)nvshmem_malloc(remote_comp_size);
-  assert(recv_remote_comp);
-
-  cudaMallocManaged(&recv_local_comp, sizeof(compbuf_t) * n_sms);
-  assert(recv_local_comp);
-  compbuf_t* cur_comp = recv_local_comp;
-  for (int i = 0; i < n_sms; i++) {
-    cur_comp->init(LOCAL_MSG_COUNT_MAX);
-    cur_comp++;
-  }
-
-  cudaMalloc(&send_comp, remote_comp_size);
-  assert(send_comp);
-
-  size_t idx_size = REMOTE_MSG_COUNT_MAX * n_pes * n_sms * sizeof(size_t);
-  cudaMalloc(&send_status_idx, idx_size);
-  cudaMalloc(&recv_remote_comp_idx, idx_size);
-  assert(send_status_idx && recv_remote_comp_idx);
-
-  heap_buf_size = REMOTE_MSG_COUNT_MAX * n_pes * 2 * n_sms * sizeof(composite_t);
-  cudaMalloc(&heap_buf, heap_buf_size);
-  assert(heap_buf);
-
-  // Clear data structures
-  cudaMemsetAsync(send_status, 0, status_size, stream);
-  cudaMemsetAsync(recv_remote_comp, 0, remote_comp_size, stream);
-  cudaMemsetAsync(send_comp, 0, remote_comp_size, stream);
-  cudaMemsetAsync(send_status_idx, 0, idx_size, stream);
-  cudaMemsetAsync(recv_remote_comp_idx, 0, idx_size, stream);
-  cudaMemsetAsync(heap_buf, 0, heap_buf_size, stream);
-
-  cudaStreamSynchronize(stream);
-  cuda_check_error();
-  */
 }
 
 void charm::comm_fini_host() {
@@ -206,9 +157,11 @@ void charm::comm_fini_host() {
 }
 
 __device__ void charm::comm::init() {
-  int comp_count = LOCAL_MSG_MAX * c_n_sms * 2;
-  composite_t* my_heap_buf_local = heap_buf_local + comp_count * blockIdx.x;
-  addr_heap.init(my_heap_buf_local, comp_count);
+  int comp_local_count = LOCAL_MSG_MAX * c_n_sms * 2;
+  composite_t* my_heap_buf_local = heap_buf_local + comp_local_count * blockIdx.x;
+  addr_heap_local.init(my_heap_buf_local, comp_local_count);
+  int comp_remote_count = REMOTE_MSG_MAX * c_n_clusters_dev * 2;
+  // TODO
 
   begin_term_flag = false;
   do_term_flag = false;
@@ -530,7 +483,7 @@ __device__ void charm::comm::cleanup() {
     uint64_t* src_send_comp_local = send_comp_local
       + LOCAL_MSG_MAX * c_n_sms * src_pe_local;
     composite_t comp(src_send_comp_local[clup_idx]);
-    addr_heap.push(comp);
+    addr_heap_local.push(comp);
     PDEBUG("PE %d (SM %d) flagging message for cleanup: offset %llu, size %llu, "
         "dst SM %d, idx %d\n", (int)s_mem[s_idx::my_pe], src_pe_local,
         comp.offset(), comp.size(), clup_idx / LOCAL_MSG_MAX, clup_idx % LOCAL_MSG_MAX);
@@ -541,7 +494,7 @@ __device__ void charm::comm::cleanup() {
     ringbuf_t* my_mbuf_local = mbuf_local + blockIdx.x;
     // Clean up as many messages as possible
     while (true) {
-      top = addr_heap.top();
+      top = addr_heap_local.top();
       if (top.data == UINT64_MAX) break;
 
       clup_offset = top.offset();
@@ -554,7 +507,7 @@ __device__ void charm::comm::cleanup() {
           my_mbuf_local->print();
           assert(false);
         }
-        addr_heap.pop();
+        addr_heap_local.pop();
         PDEBUG("PE %d (SM %d) releasing message: offset %llu, size %llu\n",
             (int)s_mem[s_idx::my_pe], src_pe_local, clup_offset, clup_size);
       } else break;

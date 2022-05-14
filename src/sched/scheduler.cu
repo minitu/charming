@@ -101,7 +101,7 @@ __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
   // For grid synchronization
   cg::grid_group grid = cg::this_grid();
 
-  // Communication module resides in shared memory (one per PE/TB)
+  // Communication module resides in shared memory (one per TB)
   comm* c = (comm*)(s_mem + SMEM_CNT_MAX);
 
   if (threadIdx.x == 0) {
