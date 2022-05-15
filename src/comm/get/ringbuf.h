@@ -16,7 +16,7 @@ struct ringbuf_t {
   size_t write;
   size_t read;
 
-  __host__ void init(void* ptr, size_t size, int my_idx);
+  __host__ void init(void* ptr, size_t start, size_t size);
   __device__ bool acquire(size_t size, size_t& ret_offset);
   __device__ bool release(size_t size);
   __device__ void print();

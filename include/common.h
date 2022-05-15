@@ -28,6 +28,8 @@ extern __constant__ int c_n_devs_node;
 extern __constant__ int c_n_nodes;
 extern __constant__ int c_n_pes;
 extern __constant__ int c_n_pes_node;
+extern __constant__ int c_n_ces;
+extern __constant__ int c_n_ces_node;
 
 // Indices into shared memory
 enum s_idx : int {

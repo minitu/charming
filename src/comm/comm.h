@@ -9,7 +9,8 @@
 
 namespace charm {
 
-void comm_init_host(int n_pes, int n_sms, int h_n_clusters);
+void comm_init_host(int n_sms, int n_pes, int n_ces, int h_n_clusters_dev,
+    int n_pes_cluster, int n_ces_cluster);
 void comm_fini_host();
 
 struct alignas(ALIGN_SIZE) comm {

@@ -41,10 +41,9 @@ struct alignas(ALIGN_SIZE) request_msg : regular_msg {
 struct alignas(ALIGN_SIZE) envelope {
   alignas(ALIGN_SIZE) msgtype type;
   alignas(ALIGN_SIZE) size_t size;
-  alignas(ALIGN_SIZE) int src_pe;
 
-  __device__ envelope(msgtype type_, size_t size_, int src_pe_)
-    : type(type_), size(size_), src_pe(src_pe_) {}
+  __device__ envelope(msgtype type_, size_t size_)
+    : type(type_), size(size_) {}
 
   // Determine total size of message for memory allocation
   inline static __device__ size_t alloc_size(msgtype type, size_t payload_size) {
@@ -83,6 +82,7 @@ __device__ void send_local_msg(envelope* env, size_t offset, int dst_local_rank)
 __device__ void send_remote_msg(envelope* env, size_t offset, int dst_local_rank);
 __device__ void send_reg_msg(int chare_id, int chare_idx, int ep_id, void* buf,
     size_t payload_size, int dst_pe);
+__device__ void send_ce_msg(request_msg* req);
 __device__ void send_user_msg(int chare_id, int chare_idx, int ep_id,
     const message& msg);
 __device__ void send_user_msg(int chare_id, int chare_idx, int ep_id,

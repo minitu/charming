@@ -96,7 +96,7 @@ struct chare_proxy : chare_proxy_base {
     entry_methods[em_count++] = new entry_method<C, Func>();
   }
 
-  // Called on all PEs before main (single-threaded)
+  // Called on all TBs before main (single-threaded)
   __device__ void create(int n_chares) {
     int n_pes = c_n_pes;
     int my_pe = s_mem[s_idx::my_pe];

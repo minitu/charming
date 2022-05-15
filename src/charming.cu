@@ -34,6 +34,8 @@ __constant__ int c_n_devs_node;
 __constant__ int c_n_nodes;
 __constant__ int c_n_pes;
 __constant__ int c_n_pes_node;
+__constant__ int c_n_ces;
+__constant__ int c_n_ces_node;
 
 // GPU global memory
 __device__ __managed__ chare_proxy_table* proxy_tables;
@@ -79,7 +81,9 @@ int main(int argc, char* argv[]) {
   int h_n_devs_node = nvshmem_team_n_pes(NVSHMEMX_TEAM_NODE);
   int h_n_nodes = h_n_devs / h_n_devs_node;
   int h_n_pes = h_n_devs * h_n_clusters_dev * h_n_pes_cluster;
+  int h_n_ces = h_n_devs * h_n_clusters_dev * h_n_ces_cluster;
   int h_n_pes_node = h_n_pes / h_n_nodes;
+  int h_n_ces_node = h_n_ces / h_n_nodes;
 
   // Check if number of PE clusters is valid
   if (h_n_sms % h_n_clusters_dev != 0) {
@@ -161,6 +165,8 @@ int main(int argc, char* argv[]) {
   cudaMemcpyToSymbolAsync(c_n_devs_node, &h_n_devs_node, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(c_n_pes, &h_n_pes, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(c_n_pes_node, &h_n_pes_node, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(c_n_ces, &h_n_ces, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(c_n_ces_node, &h_n_ces_node, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(c_n_nodes, &h_n_nodes, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
   cuda_check_error();
 
@@ -188,7 +194,7 @@ int main(int argc, char* argv[]) {
     PINFO("Initiating CharminG\n");
     PINFO("PEs: %d, GPU Devices: %d, Nodes: %d\n", h_n_pes, h_n_devs, h_n_nodes);
     PINFO("PE Clusters: %d (%d PEs, %d CEs per cluster)\n", h_n_clusters_dev,
-        h_n_pes_cluster, h_n_ces_cluster);
+        h_n_pes_cluster * h_n_devs, h_n_ces_cluster);
     PINFO("Thread grid: %d x %d x %d, Thread block: %d x %d x %d\n",
         grid_dim.x, grid_dim.y, grid_dim.z, block_dim.x, block_dim.y, block_dim.z);
     PINFO("Stack size: %llu Bytes, Heap size: %llu Bytes\n", stack_size, heap_size);
@@ -198,7 +204,8 @@ int main(int argc, char* argv[]) {
   }
 
   // Initialize communication module
-  comm_init_host(h_n_pes, h_n_sms, h_n_clusters_dev);
+  comm_init_host(h_n_sms, h_n_pes, h_n_ces, h_n_clusters_dev,
+      h_n_pes_cluster, h_n_ces_cluster);
   nvshmemx_barrier_all_on_stream(stream);
 
   // Launch scheduler kernel
