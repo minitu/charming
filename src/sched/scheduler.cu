@@ -13,16 +13,6 @@
 namespace cg = cooperative_groups;
 using namespace charm;
 
-// GPU constant memory
-extern __constant__ int c_n_sms;
-extern __constant__ int c_my_dev;
-extern __constant__ int c_my_dev_node;
-extern __constant__ int c_n_devs;
-extern __constant__ int c_n_devs_node;
-extern __constant__ int c_n_nodes;
-extern __constant__ int c_n_pes;
-extern __constant__ int c_n_pes_node;
-
 // GPU global memory
 extern __device__ __managed__ chare_proxy_table* proxy_tables;
 
@@ -56,6 +46,13 @@ __device__ msgtype charm::process_msg(void* addr, ssize_t* processed_size,
 
     chare_proxy->call(msg->chare_idx, msg->ep_id, payload);
 
+  } else if (type == msgtype::request) {
+    // Only CEs would receive requests
+    request_msg* msg = (request_msg*)((char*)env + sizeof(envelope));
+    if (threadIdx.x == 0) {
+      PDEBUG("PE %d request msg chare ID %d chare idx %d EP ID %d\n", my_pe,
+          msg->chare_id, msg->chare_idx, msg->ep_id);
+    }
   } else if (type == msgtype::begin_terminate) {
     // Should only be received by PE 0
     assert(my_pe == 0);
@@ -109,9 +106,24 @@ __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
     c->init();
 
     // Store my PE number in shared memory
-    s_mem[s_idx::my_pe] = c_my_dev * c_n_sms + blockIdx.x; // CharminG PE
-    s_mem[s_idx::my_pe_node] = c_my_dev_node * c_n_sms + blockIdx.x; // CharminG PE rank on physical node
-    s_mem[s_idx::my_pe_nvshmem] = s_mem[s_idx::my_pe] / c_n_sms; // NVSHMEM PE
+    int cluster_size = c_n_sms / c_n_clusters_dev;
+    int my_cluster = blockIdx.x / cluster_size;
+    int my_rank_in_cluster = blockIdx.x % cluster_size;
+    int is_pe = (my_rank_in_cluster < c_n_pes_cluster) ? 1 : 0;
+    int my_pe = (c_my_dev * c_n_clusters_dev + my_cluster) * c_n_pes_cluster
+      + my_rank_in_cluster;
+    int my_ce = (c_my_dev * c_n_clusters_dev + my_cluster) * c_n_ces_cluster
+      + my_rank_in_cluster - c_n_pes_cluster;
+    s_mem[s_idx::is_pe] = (uint64_t)is_pe;
+    if (is_pe) {
+      s_mem[s_idx::my_pe] = my_pe;
+      s_mem[s_idx::my_ce] = UINT64_MAX;
+      printf("!!! TB %2d -> PE %2d (CE %d)\n", blockIdx.x, my_pe, get_ce_from_pe(my_pe));
+    } else {
+      s_mem[s_idx::my_pe] = UINT64_MAX;
+      s_mem[s_idx::my_ce] = my_ce;
+      printf("!!! TB %2d -> CE %2d\n", blockIdx.x, my_ce);
+    }
 
     // Create user chares and register entry methods
     create_chares(argc, argv, argvs);
@@ -125,6 +137,7 @@ __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
   }
   grid.sync();
 
+  /*
   int my_pe = s_mem[s_idx::my_pe];
   if (my_pe == 0) {
     // Execute user's main function
@@ -141,6 +154,7 @@ __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
   do {
     loop(c);
   } while (!c->do_term_flag);
+  */
 
   // Global synchronization
   if (gid == 0) {

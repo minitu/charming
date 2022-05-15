@@ -18,8 +18,16 @@
 
 extern __constant__ int c_n_sms;
 extern __constant__ int c_n_clusters_dev;
+extern __constant__ int c_cluster_size;
 extern __constant__ int c_n_pes_cluster;
 extern __constant__ int c_n_ces_cluster;
+extern __constant__ int c_my_dev;
+extern __constant__ int c_my_dev_node;
+extern __constant__ int c_n_devs;
+extern __constant__ int c_n_devs_node;
+extern __constant__ int c_n_nodes;
+extern __constant__ int c_n_pes;
+extern __constant__ int c_n_pes_node;
 
 // Indices into shared memory
 enum s_idx : int {
@@ -28,21 +36,21 @@ enum s_idx : int {
   size = 2,
   env = 3,
   offset = 4,
-  my_pe = 8,
-  my_pe_node = 9,
-  my_pe_nvshmem = 10
+  is_pe = 8,
+  my_pe = 9,
+  my_ce = 10
 };
 
 __device__ __forceinline__ int get_local_rank_from_pe(int pe) {
-  int local_pe = pe % (c_n_clusters_dev * c_n_pes_cluster);
-  int cluster = local_pe / c_n_pes_cluster;
-  return (cluster * (c_n_pes_cluster + c_n_ces_cluster) + local_pe % c_n_pes_cluster);
+  int pe_dev = pe % (c_n_clusters_dev * c_n_pes_cluster);
+  int cluster_dev = pe_dev / c_n_pes_cluster;
+  return (cluster_dev * c_cluster_size + pe_dev % c_n_pes_cluster);
 }
 
 __device__ __forceinline__ int get_local_rank_from_ce(int ce) {
-  int local_ce = ce % (c_n_clusters_dev * c_n_ces_cluster);
-  int cluster = local_ce / c_n_ces_cluster;
-  return (cluster * (c_n_pes_cluster + c_n_ces_cluster) + c_n_pes_cluster + local_ce % c_n_ces_cluster);
+  int ce_dev = ce % (c_n_clusters_dev * c_n_ces_cluster);
+  int cluster_dev = ce_dev / c_n_ces_cluster;
+  return (cluster_dev * c_cluster_size + c_n_pes_cluster + ce_dev % c_n_ces_cluster);
 }
 
 __device__ __forceinline__ int get_dev_from_pe(int pe) {
@@ -56,7 +64,11 @@ __device__ __forceinline__ int get_dev_from_ce(int ce) {
 }
 
 __device__ __forceinline__ int get_ce_from_pe(int pe) {
-  return (pe / c_n_pes_cluster);
+  // Round-robin assignment of PEs to CEs
+  int cluster_global = pe / c_n_pes_cluster;
+  int start_ce = cluster_global * c_n_ces_cluster;
+  int rank_in_cluster = get_local_rank_from_pe(pe) % c_cluster_size;
+  return (start_ce + (rank_in_cluster % c_n_ces_cluster));
 }
 
 #endif // _COMMON_H_

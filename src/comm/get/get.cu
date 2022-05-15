@@ -34,19 +34,6 @@ typedef unsigned long long int atomic64_t;
 
 extern cudaStream_t stream;
 
-// GPU constant memory
-extern __constant__ int c_n_sms;
-extern __constant__ int c_n_clusters_dev;
-extern __constant__ int c_n_pes_cluster;
-extern __constant__ int c_n_ces_cluster;
-extern __constant__ int c_my_dev;
-extern __constant__ int c_my_dev_node;
-extern __constant__ int c_n_devs;
-extern __constant__ int c_n_devs_node;
-extern __constant__ int c_n_nodes;
-extern __constant__ int c_n_pes;
-extern __constant__ int c_n_pes_node;
-
 // Managed memory (actual data may reside in GPU global memory)
 __managed__ void* nvshmem_buf_local; // NVSHMEM
 __managed__ void* nvshmem_buf_remote; // NVSHMEM
@@ -597,7 +584,7 @@ __device__ void charm::message::free() {
 
 // Single-threaded
 __device__ envelope* charm::create_envelope(msgtype type, size_t payload_size,
-    size_t& offset, int dst_pe) {
+    size_t& offset) {
   size_t msg_size = envelope::alloc_size(type, payload_size);
 
   // Reserve space for this message in message buffer
@@ -615,41 +602,39 @@ __device__ envelope* charm::create_envelope(msgtype type, size_t payload_size,
   return new (my_mbuf_local->addr(offset)) envelope(type, msg_size, my_pe);
 }
 
-__device__ void charm::send_msg(envelope* env, size_t offset, int dst_pe) {
-  int src_pe_local = blockIdx.x;
-  int dst_pe_local = get_pe_local(dst_pe);
-  if (get_pe_nvshmem(dst_pe) == s_mem[s_idx::my_pe_nvshmem]) {
-    // Message local to this NVSHMEM PE
-    volatile int* src_send_status_local = send_status_local + LOCAL_MSG_MAX * c_n_sms * src_pe_local
-      + LOCAL_MSG_MAX * dst_pe_local;
+__device__ void charm::send_local_msg(envelope* env, size_t offset, int dst_local_rank) {
+  int src_local_rank = blockIdx.x;
+  // Message local to this device
+  volatile int* src_send_status_local = send_status_local + LOCAL_MSG_MAX * c_n_sms * src_local_rank
+    + LOCAL_MSG_MAX * dst_local_rank;
 
-    // Find and reserve free message index
-    int free_idx = find_signal_block(src_send_status_local, LOCAL_MSG_MAX, SIGNAL_FREE,
-        SIGNAL_USED, true);
+  // Find and reserve free message index
+  int free_idx = find_signal_block(src_send_status_local, LOCAL_MSG_MAX, SIGNAL_FREE,
+      SIGNAL_USED, true);
 
-    if (threadIdx.x == 0) {
-      PDEBUG("PE %d (SM %d) sending local message (env %p, msgtype %d, size %llu) "
-          "to PE %d (SM %d) at index %d\n",
-          (int)s_mem[s_idx::my_pe], src_pe_local, env, env->type, env->size,
-          dst_pe, dst_pe_local, free_idx);
+  if (threadIdx.x == 0) {
+    PDEBUG("Local rank %d sending message to local rank %d at index %d: "
+        "env %p, msgtype %d, size %llu",
+        src_local_rank, dst_local_rank, free_idx, env, env->type, env->size);
 
-      // Atomically store composite in receiver
-      volatile atomic64_t* dst_recv_comp_local = recv_comp_local + LOCAL_MSG_MAX * c_n_sms * dst_pe_local
-        + LOCAL_MSG_MAX * src_pe_local;
-      composite_t comp(offset, env->size);
-      atomic64_t ret = atomicCAS((atomic64_t*)&dst_recv_comp_local[free_idx], 0, (atomic64_t)comp.data);
-      assert(ret == 0);
+    // Atomically store composite in receiver
+    volatile atomic64_t* dst_recv_comp_local = recv_comp_local + LOCAL_MSG_MAX * c_n_sms * dst_local_rank
+      + LOCAL_MSG_MAX * src_local_rank;
+    composite_t comp(offset, env->size);
+    atomic64_t ret = atomicCAS((atomic64_t*)&dst_recv_comp_local[free_idx], 0,
+        (atomic64_t)comp.data);
+    assert(ret == 0);
 
-      // Store composite for later cleanup
-      uint64_t* src_send_comp_local = send_comp_local
-        + LOCAL_MSG_MAX * c_n_sms * src_pe_local
-        + LOCAL_MSG_MAX * dst_pe_local;
-      src_send_comp_local[free_idx] = comp.data;
-    }
-    __syncthreads();
-  } else {
-    // TODO
+    // Store composite for later cleanup
+    uint64_t* src_send_comp_local = send_comp_local
+      + LOCAL_MSG_MAX * c_n_sms * src_local_rank
+      + LOCAL_MSG_MAX * dst_local_rank;
+    src_send_comp_local[free_idx] = comp.data;
   }
+  __syncthreads();
+}
+
+__device__ void charm::send_remote_msg(envelope* env, size_t offset, int dst_pe) {
   /*
   // Create composite using offset and size of source buffer
   int my_pe = s_mem[s_idx::my_pe];
@@ -703,30 +688,45 @@ __device__ void charm::send_msg(envelope* env, size_t offset, int dst_pe) {
 __device__ void charm::send_reg_msg(int chare_id, int chare_idx, int ep_id,
     void* buf, size_t payload_size, int dst_pe) {
   if (threadIdx.x == 0) {
-    envelope* env = create_envelope(msgtype::regular, payload_size,
-        (size_t&)s_mem[s_idx::offset], dst_pe);
-    s_mem[s_idx::env] = (uint64_t)env;
+    int src_dev = get_dev_from_pe(s_mem[s_idx::my_pe]);
+    int dst_dev = get_dev_from_pe(dst_pe);
+    envelope* env;
+    if (src_dev == dst_dev) {
+      // Need to send to another PE on same device
+      env = create_envelope(msgtype::regular, payload_size,
+          (size_t&)s_mem[s_idx::offset]);
 
-    regular_msg* msg = new ((char*)env + sizeof(envelope)) regular_msg(chare_id,
+      regular_msg* msg = new ((char*)env + sizeof(envelope)) regular_msg(chare_id,
       chare_idx, ep_id);
 
-    if (payload_size > 0) {
-      s_mem[s_idx::dst] = (uint64_t)((char*)msg + sizeof(regular_msg));
-      s_mem[s_idx::src] = (uint64_t)buf;
+      if (payload_size > 0) {
+        s_mem[s_idx::dst] = (uint64_t)((char*)msg + sizeof(regular_msg));
+        s_mem[s_idx::src] = (uint64_t)buf;
+      }
       s_mem[s_idx::size] = (uint64_t)payload_size;
+    } else {
+      // Need to send to another device
+      // Create and send request to CE
+      env = create_envelope(msgtype::request, 0, (size_t&)s_mem[s_idx::offset]);
+
+      request_msg* msg = new((char*)env + sizeof(envelope)) request_msg(
+          chare_id, chare_idx, ep_id, msgtype::regular, buf, payload_size, dst_pe);
+      s_mem[s_idx::size] = 0;
     }
+    s_mem[s_idx::env] = (uint64_t)env;
   }
   __syncthreads();
 
   // Fill in payload (from regular GPU memory to NVSHMEM symmetric memory)
-  if (payload_size > 0) {
+  if (s_mem[s_idx::size] > 0) {
     memcpy_kernel((void*)s_mem[s_idx::dst], (void*)s_mem[s_idx::src],
         (size_t)s_mem[s_idx::size]);
   }
 
-  send_msg((envelope*)s_mem[s_idx::env], (size_t)s_mem[s_idx::offset], dst_pe);
+  send_local_msg((envelope*)s_mem[s_idx::env], (size_t)s_mem[s_idx::offset], dst_pe);
 }
 
+// TODO
 __device__ __forceinline__ void send_user_msg_common(int chare_id, int chare_idx,
     int ep_id, const message& msg) {
   envelope* env = msg.env;
@@ -736,7 +736,7 @@ __device__ __forceinline__ void send_user_msg_common(int chare_id, int chare_idx
   }
   __syncthreads();
 
-  send_msg(env, msg.offset, msg.dst_pe);
+  //send_msg(env, msg.offset, msg.dst_pe);
 }
 
 __device__ void charm::send_user_msg(int chare_id, int chare_idx, int ep_id,
@@ -756,10 +756,10 @@ __device__ void charm::send_term_msg(bool begin, int dst_pe) {
   if (threadIdx.x == 0) {
     envelope* env = create_envelope(
         begin ? msgtype::begin_terminate : msgtype::do_terminate, 0,
-        (size_t&)s_mem[s_idx::offset], dst_pe);
+        (size_t&)s_mem[s_idx::offset]);
     s_mem[s_idx::env] = (uint64_t)env;
   }
   __syncthreads();
 
-  send_msg((envelope*)s_mem[s_idx::env], (size_t)s_mem[s_idx::offset], dst_pe);
+  //send_msg((envelope*)s_mem[s_idx::env], (size_t)s_mem[s_idx::offset], dst_pe);
 }

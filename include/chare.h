@@ -171,7 +171,7 @@ struct chare_proxy : chare_proxy_base {
 
   inline __device__ void alloc_msg(message& msg, int idx, size_t size) {
     msg.dst_pe = loc_map[idx];
-    msg.env = create_envelope(msgtype::user, size, msg.offset, msg.dst_pe);
+    msg.env = create_envelope(msgtype::user, size, msg.offset);
   }
   inline __device__ void free_msg(message& msg) { /*TODO*/ }
 };

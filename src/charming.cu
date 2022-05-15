@@ -24,6 +24,7 @@ cudaStream_t stream;
 // GPU constant memory
 __constant__ int c_n_sms;
 __constant__ int c_n_clusters_dev;
+__constant__ int c_cluster_size;
 __constant__ int c_n_pes_cluster;
 __constant__ int c_n_ces_cluster;
 __constant__ int c_my_dev;
@@ -68,9 +69,10 @@ int main(int argc, char* argv[]) {
   //int max_threads_tb = prop.maxThreadsPerBlock;
   int h_n_sms = prop.multiProcessorCount;
   //int h_n_sms = 1;
-  int h_n_clusters_dev = 2;
-  int h_n_ces_cluster = 1;
-  int h_n_pes_cluster = (h_n_sms / h_n_clusters_dev) - h_n_ces_cluster;
+  int h_n_clusters_dev = 4;
+  int h_cluster_size = h_n_sms / h_n_clusters_dev;
+  int h_n_ces_cluster = 2;
+  int h_n_pes_cluster = h_cluster_size - h_n_ces_cluster;
   int h_my_dev = nvshmem_my_pe();
   int h_my_dev_node = nvshmem_team_my_pe(NVSHMEMX_TEAM_NODE);
   int h_n_devs = nvshmem_n_pes();
@@ -150,6 +152,7 @@ int main(int argc, char* argv[]) {
   // Transfer execution environment constants
   cudaMemcpyToSymbolAsync(c_n_sms, &h_n_sms, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(c_n_clusters_dev, &h_n_clusters_dev, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(c_cluster_size, &h_cluster_size, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(c_n_pes_cluster, &h_n_pes_cluster, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(c_n_ces_cluster, &h_n_ces_cluster, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(c_my_dev, &h_my_dev, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
@@ -238,7 +241,6 @@ __device__ void charm::abort() {
 
 __device__ int charm::my_pe() { return s_mem[s_idx::my_pe]; }
 __device__ int charm::n_pes() { return c_n_pes; }
-__device__ int charm::my_pe_node() { return s_mem[s_idx::my_pe_node]; }
 __device__ int charm::n_pes_node() { return c_n_pes_node; }
 __device__ int charm::n_nodes() { return c_n_nodes; }
 
