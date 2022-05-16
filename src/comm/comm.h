@@ -15,8 +15,7 @@ void comm_fini_host();
 
 struct alignas(ALIGN_SIZE) comm {
 #if CHARMING_COMM_TYPE == 0
-  min_heap addr_heap_local;
-  min_heap addr_heap_remote;
+  min_heap addr_heap;
 #endif
 
   bool begin_term_flag;
@@ -25,7 +24,9 @@ struct alignas(ALIGN_SIZE) comm {
   __device__ void init();
   __device__ void process_local();
   __device__ void process_remote();
-  __device__ void cleanup();
+  __device__ void cleanup_local();
+  __device__ void cleanup_remote();
+  __device__ void cleanup_heap();
 };
 
 }

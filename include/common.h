@@ -55,6 +55,10 @@ __device__ __forceinline__ int get_local_rank_from_ce(int ce) {
   return (cluster_dev * c_cluster_size + c_n_pes_cluster + ce_dev % c_n_ces_cluster);
 }
 
+__device__ __forceinline__ int get_ce_dev(int ce) {
+  return ce % (c_n_clusters_dev * c_n_ces_cluster);
+}
+
 __device__ __forceinline__ int get_dev_from_pe(int pe) {
   // Divide PE number by number of PEs per device
   return (pe / (c_n_clusters_dev * c_n_pes_cluster));

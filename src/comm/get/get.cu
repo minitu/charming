@@ -41,14 +41,14 @@ __managed__ ringbuf_t* mbuf; // Managed
 
 __managed__ volatile int* send_status_local; // Global
 __managed__ uint64_t* send_status_remote; // NVSHMEM
-__managed__ size_t* send_status_idx; // Global
+__managed__ size_t* send_status_remote_idx; // Global
 
 __managed__ uint64_t* send_comp_local; // Global
 __managed__ uint64_t* send_comp_remote; // Global
 
 __managed__ volatile atomic64_t* recv_comp_local; // Global
 __managed__ uint64_t* recv_comp_remote; // NVSHMEM
-__managed__ size_t* recv_comp_idx; // Global
+__managed__ size_t* recv_comp_remote_idx; // Global
 
 __managed__ composite_t* heap_buf; // Global
 
@@ -94,26 +94,26 @@ void charm::comm_init_host(int n_sms, int n_pes, int n_ces, int n_clusters_dev,
   assert(sizeof(atomic64_t) == sizeof(uint64_t));
   cudaMalloc(&send_status_local, status_local_size);
   send_status_remote = (uint64_t*)nvshmem_malloc(status_remote_size);
-  cudaMalloc(&send_status_idx, idx_size);
+  cudaMalloc(&send_status_remote_idx, idx_size);
   cudaMalloc(&send_comp_local, comp_local_size);
   cudaMalloc(&send_comp_remote, comp_remote_size);
   cudaMalloc(&recv_comp_local, comp_local_size);
   recv_comp_remote = (uint64_t*)nvshmem_malloc(comp_remote_size);
-  cudaMalloc(&recv_comp_idx, idx_size);
+  cudaMalloc(&recv_comp_remote_idx, idx_size);
   cudaMalloc(&heap_buf, heap_size);
-  assert(send_status_local && send_status_remote && send_comp_local
-      && send_comp_remote && recv_comp_local && recv_comp_remote
-      && heap_buf);
+  assert(send_status_local && send_status_remote && send_status_remote_idx
+      && send_comp_local && send_comp_remote && recv_comp_local
+      && recv_comp_remote && recv_comp_remote_idx && heap_buf);
 
   // Clear data structures
   cudaMemsetAsync((void*)send_status_local, 0, status_local_size, stream);
   cudaMemsetAsync((void*)send_status_remote, 0, status_remote_size, stream);
-  cudaMemsetAsync((void*)send_status_idx, 0, idx_size, stream);
+  cudaMemsetAsync((void*)send_status_remote_idx, 0, idx_size, stream);
   cudaMemsetAsync((void*)send_comp_local, 0, comp_local_size, stream);
   cudaMemsetAsync((void*)send_comp_remote, 0, comp_remote_size, stream);
   cudaMemsetAsync((void*)recv_comp_local, 0, comp_local_size, stream);
   cudaMemsetAsync((void*)recv_comp_remote, 0, comp_remote_size, stream);
-  cudaMemsetAsync((void*)recv_comp_idx, 0, idx_size, stream);
+  cudaMemsetAsync((void*)recv_comp_remote_idx, 0, idx_size, stream);
   cudaMemsetAsync((void*)heap_buf, 0, heap_size, stream);
   cudaStreamSynchronize(stream);
   cuda_check_error();
@@ -127,12 +127,12 @@ void charm::comm_fini_host() {
   cudaFree((void*)mbuf);
   cudaFree((void*)send_status_local);
   nvshmem_free(send_status_remote);
-  cudaFree((void*)send_status_idx);
+  cudaFree((void*)send_status_remote_idx);
   cudaFree((void*)send_comp_local);
   cudaFree((void*)send_comp_remote);
   cudaFree((void*)recv_comp_local);
   nvshmem_free(recv_comp_remote);
-  cudaFree((void*)recv_comp_idx);
+  cudaFree((void*)recv_comp_remote_idx);
   cudaFree((void*)heap_buf);
 }
 
@@ -140,7 +140,7 @@ __device__ void charm::comm::init() {
   // Initialize min-heap
   int comp_count = LOCAL_MSG_MAX * c_n_sms * 2;
   composite_t* my_heap_buf = heap_buf + comp_count * blockIdx.x;
-  addr_heap_local.init(my_heap_buf, comp_count);
+  addr_heap.init(my_heap_buf, comp_count);
 
   begin_term_flag = false;
   do_term_flag = false;
@@ -288,8 +288,8 @@ __device__ void charm::comm::process_local() {
           is_pe ? "PE" : "CE", dst_elem, env, env->type, env->size,
           src_local_rank, clup_idx);
 
-      volatile int* src_send_status = send_status_local + LOCAL_MSG_MAX * c_n_sms * src_local_rank
-        + LOCAL_MSG_MAX * dst_local_rank;
+      volatile int* src_send_status = send_status_local
+        + LOCAL_MSG_MAX * c_n_sms * src_local_rank + LOCAL_MSG_MAX * dst_local_rank;
 #ifdef NO_CLEANUP
       int ret = atomicCAS((int*)&src_send_status[clup_idx], SIGNAL_USED, SIGNAL_FREE);
 #else
@@ -302,135 +302,186 @@ __device__ void charm::comm::process_local() {
 }
 
 __device__ void charm::comm::process_remote() {
-  /*
-  size_t count = 0;
-  void* dst_addr = nullptr;
-  int my_pe = s_mem[s_idx::my_pe];
+  int dst_local_rank = blockIdx.x;
+  int dst_ce = s_mem[s_idx::my_ce];
+  int dst_ce_dev = get_ce_dev(dst_ce);
+  int dst_dev = get_dev_from_ce(dst_ce);
 
-  // Check if there are any message requests
-  uint64_t* my_recv_remote_comp = recv_remote_comp + (REMOTE_MSG_COUNT_MAX * c_n_pes) * blockIdx.x;
-  size_t* my_recv_remote_comp_idx = recv_remote_comp_idx + (REMOTE_MSG_COUNT_MAX * c_n_pes) * blockIdx.x;
+  // Check if there are any incoming messages
+  uint64_t* recv_comp = recv_comp_remote + (REMOTE_MSG_MAX * c_n_ces) * dst_ce_dev;
+  size_t* recv_comp_idx = recv_comp_remote_idx + (REMOTE_MSG_MAX * c_n_ces) * dst_ce_dev;
+  size_t count = 0;
 #ifdef NVSHMEM_BLOCK_IMPL
-  count = nvshmem_uint64_test_some_block(my_recv_remote_comp, REMOTE_MSG_COUNT_MAX * c_n_pes,
-      my_recv_remote_comp_idx, NVSHMEM_CMP_GT, 0);
-#endif
+  count = nvshmem_uint64_test_some_block(recv_comp, REMOTE_MSG_MAX * c_n_ces,
+      recv_comp_idx, NVSHMEM_CMP_GT, 0);
+#else
   if (threadIdx.x == 0) {
-#ifndef NVSHMEM_BLOCK_IMPL
-    count = nvshmem_uint64_test_some(my_recv_remote_comp, REMOTE_MSG_COUNT_MAX * c_n_pes,
-        my_recv_remote_comp_idx, nullptr, NVSHMEM_CMP_GT, 0);
-#endif
+    count = nvshmem_uint64_test_some(recv_comp, REMOTE_MSG_MAX * c_n_ces,
+        recv_comp_idx, nullptr, NVSHMEM_CMP_GT, 0);
     s_mem[s_idx::size] = (uint64_t)count;
   }
   __syncthreads();
   count = (size_t)s_mem[s_idx::size];
+#endif
 
-  ringbuf_t* my_mbuf = mbuf + blockIdx.x;
   if (count > 0) {
-    for (size_t i = 0; i < count; i++) {
-      size_t msg_idx;
-      size_t msg_size;
-      int src_pe;
-      ringbuf_off_t dst_offset;
+    ringbuf_t* dst_mbuf = mbuf + dst_local_rank;;
+    size_t found_idx;
+    uint64_t data;
+    size_t src_offset;
+    size_t msg_size;
+    int src_ce;
+    int src_ce_dev;
+    int src_dev;
+    size_t msg_idx;
+    size_t dst_offset;
+    void* dst_addr = nullptr;
 
+    for (size_t i = 0; i < count; i++) {
       if (threadIdx.x == 0) {
-        // Obtain information about this message request
-        msg_idx = my_recv_remote_comp_idx[i];
-        uint64_t data = nvshmem_signal_fetch(my_recv_remote_comp + msg_idx);
+        // Obtain information about this message
+        found_idx = recv_comp_idx[i];
+        data = nvshmem_signal_fetch(recv_comp + found_idx);
         composite_t src_composite(data);
-        size_t src_offset = src_composite.offset();
+        src_offset = src_composite.offset();
         msg_size = src_composite.size();
-        src_pe = msg_idx / REMOTE_MSG_COUNT_MAX;
-        msg_idx -= REMOTE_MSG_COUNT_MAX * src_pe;
+        src_ce = found_idx / REMOTE_MSG_MAX;
+        msg_idx = found_idx % REMOTE_MSG_MAX;
 
         // Reserve space for incoming message
-        dst_offset = my_mbuf->acquire(msg_size);
-        if (dst_offset == -1) {
-          PERROR("PE %d: Not enough space in message buffer\n", my_pe);
+        bool success = dst_mbuf->acquire(msg_size, dst_offset);
+        if (!success) {
+          PERROR("CE %d: Not enough space in message buffer\n", dst_ce);
           assert(false);
         }
-        PDEBUG("PE %d acquired message: offset %llu, size %llu\n",
-            my_pe, dst_offset, msg_size);
+        PDEBUG("CE %d acquired space for incoming remote message: offset %llu, size %llu\n",
+            dst_ce, dst_offset, msg_size);
 
         // Perform a get operation to fetch the message
         // TODO: Make asynchronous
-        dst_addr = my_mbuf->addr(dst_offset);
+        dst_addr = dst_mbuf->addr(dst_offset);
         s_mem[s_idx::dst] = (uint64_t)dst_addr;
-        int src_pe_local = src_pe % c_n_sms;
-        int src_pe_nvshmem = src_pe / c_n_sms;
-        ringbuf_t* src_mbuf = mbuf + src_pe_local;
-        nvshmem_char_get((char*)dst_addr, (char*)src_mbuf->addr(src_offset),
-            msg_size, src_pe_nvshmem);
-        PDEBUG("PE %d receiving message: src offset %llu, dst offset %llu, "
-            "size %llu, src PE %d, idx %llu\n", my_pe, src_offset, dst_offset,
-            msg_size, src_pe, msg_idx);
+        src_ce_dev = get_ce_dev(src_ce);
+        src_dev = get_dev_from_ce(src_ce);
+        nvshmem_char_get((char*)dst_addr, (char*)dst_mbuf->addr(src_offset),
+            msg_size, src_dev);
+        PDEBUG("CE %d remote get: src offset %llu, dst offset %llu, "
+            "size %llu, src CE %d, idx %llu\n", dst_ce, src_offset, dst_offset,
+            msg_size, src_ce, msg_idx);
       }
       __syncthreads();
       dst_addr = (void*)s_mem[s_idx::dst];
 
       // Process message in parallel
-      msgtype type = process_msg(dst_addr, nullptr, begin_term_flag, do_term_flag);
+      msgtype type = process_msg_ce(dst_addr, nullptr, begin_term_flag, do_term_flag);
 
       if (threadIdx.x == 0) {
         // Clear message request
         // FIXME: Need fence after?
-        nvshmemx_signal_op(my_recv_remote_comp + REMOTE_MSG_COUNT_MAX * src_pe + msg_idx,
-            SIGNAL_FREE, NVSHMEM_SIGNAL_SET, s_mem[s_idx::my_pe_nvshmem]);
+        nvshmemx_signal_op(recv_comp + found_idx, SIGNAL_FREE, NVSHMEM_SIGNAL_SET,
+            dst_dev);
 
-        int src_pe_nvshmem = src_pe / c_n_sms;
-        int src_pe_local = src_pe % c_n_sms;
-        uint64_t* src_send_status = send_status + (REMOTE_MSG_COUNT_MAX * c_n_pes) * src_pe_local;
+        uint64_t* src_send_status = send_status_remote
+          + (REMOTE_MSG_MAX * c_n_ces) * src_ce_dev
+          + REMOTE_MSG_MAX * dst_ce;
+        int signal = SIGNAL_FREE;
 #ifndef NO_CLEANUP
         // Store composite to be cleared from memory
         composite_t dst_composite(dst_offset, msg_size);
         addr_heap.push(dst_composite);
-        PDEBUG("PE %d flagging received message for cleanup: offset %llu, "
-            "size %llu, src PE %d, idx %llu\n", my_pe, dst_composite.offset(),
-            dst_composite.size(), src_pe, msg_idx);
-
-        // Notify sender that message is ready for cleanup
-        int signal = (type == msgtype::user) ? SIGNAL_FREE : SIGNAL_CLUP;
-        nvshmemx_signal_op(src_send_status + REMOTE_MSG_COUNT_MAX * my_pe + msg_idx,
-            signal, NVSHMEM_SIGNAL_SET, src_pe_nvshmem);
-#else
+        signal = (type == msgtype::user) ? SIGNAL_FREE : SIGNAL_CLUP;
+        PDEBUG("CE %d flagging remote message for cleanup: signal %d, "
+            "offset %llu, size %llu, src CE %d, idx %llu\n", dst_ce, signal,
+            dst_composite.offset(), dst_composite.size(), src_ce, msg_idx);
+#endif
         // Notify sender that message has been delivered
-        nvshmemx_signal_op(src_send_status + REMOTE_MSG_COUNT_MAX * my_pe + msg_idx,
-            SIGNAL_FREE, NVSHMEM_SIGNAL_SET, src_pe_nvshmem);
-#endif // !NO_CLEANUP
+        nvshmemx_signal_op(src_send_status + msg_idx, signal, NVSHMEM_SIGNAL_SET,
+            src_ce_dev);
       }
       __syncthreads();
     }
 
     // Reset indices array for next use
-    memset_kernel(my_recv_remote_comp_idx, 0, REMOTE_MSG_COUNT_MAX * c_n_pes * sizeof(size_t));
+    memset_kernel(recv_comp_idx, 0, REMOTE_MSG_MAX * c_n_ces * sizeof(size_t));
   }
-*/
 }
 
-__device__ void charm::comm::cleanup() {
-#ifndef NO_CLEANUP
-  // Cleanup using min-heap
-  int src_pe_local = blockIdx.x;
-  volatile int* src_send_status_local = send_status_local + LOCAL_MSG_MAX * c_n_sms * src_pe_local;
-  int clup_idx = find_signal_block(src_send_status_local, LOCAL_MSG_MAX * c_n_sms,
+__device__ void charm::comm::cleanup_local() {
+  int local_rank = blockIdx.x;
+  volatile int* send_status = send_status_local + LOCAL_MSG_MAX * c_n_sms * local_rank;
+  int clup_idx = find_signal_block(send_status, LOCAL_MSG_MAX * c_n_sms,
       SIGNAL_CLUP, SIGNAL_FREE, false);
 
-  // Push stored composite to min-heap and clean up
+  // If a message needs to be cleaned up, add composite to min-heap
   if (clup_idx != INT_MAX && threadIdx.x == 0) {
-    uint64_t* src_send_comp_local = send_comp_local
-      + LOCAL_MSG_MAX * c_n_sms * src_pe_local;
-    composite_t comp(src_send_comp_local[clup_idx]);
-    addr_heap_local.push(comp);
-    PDEBUG("PE %d (SM %d) flagging message for cleanup: offset %llu, size %llu, "
-        "dst SM %d, idx %d\n", (int)s_mem[s_idx::my_pe], src_pe_local,
-        comp.offset(), comp.size(), clup_idx / LOCAL_MSG_MAX, clup_idx % LOCAL_MSG_MAX);
+    uint64_t* send_comp = send_comp_local + LOCAL_MSG_MAX * c_n_sms * local_rank;
+    composite_t comp(send_comp[clup_idx]);
+    addr_heap.push(comp);
+    PDEBUG("%s %d (local rank %d) flagging message for cleanup: offset %llu, size %llu, "
+        "dst local rank %d, idx %d\n", s_mem[s_idx::is_pe] ? "PE" : "CE",
+        s_mem[s_idx::is_pe] ? (int)s_mem[s_idx::my_pe] : (int)s_mem[s_idx::my_ce],
+        local_rank, comp.offset(), comp.size(), clup_idx / LOCAL_MSG_MAX,
+        clup_idx % LOCAL_MSG_MAX);
+  }
+  __syncthreads();
+}
 
+__device__ void charm::comm::cleanup_remote() {
+  int my_ce_dev = get_ce_dev(s_mem[s_idx::my_ce]);
+  int my_dev = get_ce_dev(s_mem[s_idx::my_ce]);
+
+  // Check for messages that have been delivered to the destination PE
+  uint64_t* send_status = send_status_remote + (REMOTE_MSG_MAX * c_n_ces) * my_ce_dev;
+  uint64_t* send_status_idx = send_status_remote_idx + (REMOTE_MSG_MAX * c_n_ces) * my_ce_dev;
+  size_t count = 0;
+#ifdef NVSHMEM_BLOCK_IMPL
+  count = nvshmem_uint64_test_some_block(send_status, REMOTE_MSG_MAX * c_n_ces,
+      send_status_idx, NVSHMEM_CMP_EQ, SIGNAL_CLUP);
+#else
+  if (threadIdx.x == 0) {
+    count = nvshmem_uint64_test_some(send_status, REMOTE_MSG_MAX * c_n_ces,
+        send_status_idx, nullptr, NVSHMEM_CMP_EQ, SIGNAL_CLUP);
+    s_mem[s_idx::size] = (uint64_t)count;
+  }
+  __syncthreads();
+  count = (size_t)s_mem[s_idx::size];
+#endif
+
+  // Push composites to min-heap for cleanup
+  if (count > 0) {
+    if (threadIdx.x == 0) {
+      uint64_t* send_comp = send_comp_remote + (REMOTE_MSG_MAX * c_n_ces) * my_ce_dev;
+
+      for (size_t i = 0; i < count; i++) {
+        size_t found_idx = send_status_idx[i];
+        composite_t src_composite(send_comp[found_idx]);
+        addr_heap.push(src_composite);
+        PDEBUG("CE %d flagging sent message for cleanup: offset %llu, size %llu, "
+            "dst CE %llu, idx %llu\n", (int)s_mem[s_idx::my_ce], src_composite.offset(),
+            src_composite.size(), found_idx / REMOTE_MSG_MAX, found_idx % REMOTE_MSG_MAX);
+
+        // Reset signal to SIGNAL_FREE
+        nvshmemx_signal_op(send_status + found_idx, SIGNAL_FREE,
+            NVSHMEM_SIGNAL_SET, my_dev);
+      }
+    }
+    __syncthreads();
+
+    // Reset indices array for next use
+    memset_kernel(send_status_idx, 0, REMOTE_MSG_MAX * c_n_ces * sizeof(size_t));
+  }
+}
+
+__device__ void charm::comm::cleanup_heap() {
+  // Check min-heap and free messages
+  if (threadIdx.x == 0) {
+    int local_rank = blockIdx.x;
     composite_t top;
     size_t clup_offset;
     size_t clup_size;
-    ringbuf_t* my_mbuf = mbuf + blockIdx.x;
-    // Clean up as many messages as possible
+    ringbuf_t* my_mbuf = mbuf + local_rank;
     while (true) {
-      top = addr_heap_local.top();
+      top = addr_heap.top();
       if (top.data == UINT64_MAX) break;
 
       clup_offset = top.offset();
@@ -438,86 +489,22 @@ __device__ void charm::comm::cleanup() {
       if ((clup_offset == my_mbuf->start_offset + my_mbuf->read) && clup_size > 0) {
         bool success = my_mbuf->release(clup_size);
         if (!success) {
-          PERROR("PE %d: Failed to release message: offset %llu, size %llu\n",
-              (int)s_mem[s_idx::my_pe], clup_offset, clup_size);
+          PERROR("%s %d failed to release message: offset %llu, size %llu\n",
+              s_mem[s_idx::is_pe] ? "PE" : "CE",
+              s_mem[s_idx::is_pe] ? (int)s_mem[s_idx::my_pe] : (int)s_mem[s_idx::my_ce],
+              clup_offset, clup_size);
           my_mbuf->print();
           assert(false);
         }
-        addr_heap_local.pop();
-        PDEBUG("PE %d (SM %d) releasing message: offset %llu, size %llu\n",
-            (int)s_mem[s_idx::my_pe], src_pe_local, clup_offset, clup_size);
-      } else break;
-    }
-  }
-  __syncthreads();
-#endif
-
-  /*
-#ifndef NO_CLEANUP
-  size_t count = 0;
-
-  // Check for messages that have been delivered to the destination PE
-  uint64_t* my_send_status = send_status + (REMOTE_MSG_COUNT_MAX * c_n_pes) * blockIdx.x;
-  uint64_t* my_send_status_idx = send_status_idx + (REMOTE_MSG_COUNT_MAX * c_n_pes) * blockIdx.x;
-#ifdef NVSHMEM_BLOCK_IMPL
-  count = nvshmem_uint64_test_some_block(my_send_status, REMOTE_MSG_COUNT_MAX * c_n_pes,
-      my_send_status_idx, NVSHMEM_CMP_EQ, SIGNAL_CLUP);
-#endif
-  if (threadIdx.x == 0) {
-#ifndef NVSHMEM_BLOCK_IMPL
-    count = nvshmem_uint64_test_some(my_send_status, REMOTE_MSG_COUNT_MAX * c_n_pes,
-        my_send_status_idx, nullptr, NVSHMEM_CMP_EQ, SIGNAL_CLUP);
-#endif
-    s_mem[s_idx::size] = (uint64_t)count;
-  }
-  __syncthreads();
-  count = (size_t)s_mem[s_idx::size];
-
-  if (count > 0) {
-    if (threadIdx.x == 0) {
-      for (size_t i = 0; i < count; i++) {
-        size_t msg_idx = my_send_status_idx[i];
-
-        // Push stored composite to heap to be cleared from memory
-        uint64_t* my_send_comp = send_comp + (REMOTE_MSG_COUNT_MAX * c_n_pes) * blockIdx.x;
-        composite_t src_composite(my_send_comp[msg_idx]);
-        addr_heap.push(src_composite);
-        PDEBUG("PE %d flagging sent message for cleanup: offset %llu, size %llu, "
-            "dst PE %llu, idx %llu\n", (int)s_mem[s_idx::my_pe], src_composite.offset(),
-            src_composite.size(), msg_idx / REMOTE_MSG_COUNT_MAX,
-            msg_idx % REMOTE_MSG_COUNT_MAX);
-
-        // Reset signal to SIGNAL_FREE
-        nvshmemx_signal_op(my_send_status + msg_idx, SIGNAL_FREE,
-            NVSHMEM_SIGNAL_SET, s_mem[s_idx::my_pe_nvshmem]);
-      }
-    }
-    __syncthreads();
-
-    // Reset indices array for next use
-    memset_kernel(my_send_status_idx, 0, REMOTE_MSG_COUNT_MAX * c_n_pes * sizeof(size_t));
-  }
-
-  // Clean up messages
-  if (threadIdx.x == 0) {
-    while (true) {
-      composite_t comp = addr_heap.top();
-      if (comp.data == UINT64_MAX) break;
-
-      size_t clup_offset = comp.offset();
-      size_t clup_size = comp.size();
-      ringbuf_t* my_mbuf = mbuf + blockIdx.x;
-      if (clup_offset == my_mbuf->read && clup_size > 0) {
-        my_mbuf->release(clup_size);
         addr_heap.pop();
-        PDEBUG("PE %d releasing message: offset %llu, size %llu\n",
-            (int)s_mem[s_idx::my_pe], clup_offset, clup_size);
+        PDEBUG("%s %d releasing message: offset %llu, size %llu\n",
+            s_mem[s_idx::is_pe] ? "PE" : "CE",
+            s_mem[s_idx::is_pe] ? (int)s_mem[s_idx::my_pe] : (int)s_mem[s_idx::my_ce],
+            clup_offset, clup_size);
       } else break;
     }
   }
   __syncthreads();
-#endif // !NO_CLEANUP
-*/
 }
 
 /*
@@ -539,57 +526,60 @@ __device__ envelope* charm::create_envelope(msgtype type, size_t payload_size,
   // Reserve space for this message in message buffer
   bool is_pe = (s_mem[s_idx::is_pe] == 1);
   int my_elem = is_pe ? s_mem[s_idx::my_pe] : s_mem[s_idx::my_ce];
-  ringbuf_t* my_mbuf = mbuf + blockIdx.x;
-  bool success = my_mbuf->acquire(msg_size, offset);
+  ringbuf_t* src_mbuf = mbuf + blockIdx.x;
+  bool success = src_mbuf->acquire(msg_size, offset);
   if (!success) {
     PERROR("%s %d: Not enough space in message buffer\n",
         is_pe ? "PE" : "CE", my_elem);
-    my_mbuf->print();
+    src_mbuf->print();
     assert(false);
   }
   PDEBUG("%s %d acquired message: offset %llu, size %llu\n",
       is_pe ? "PE" : "CE", my_elem, offset, msg_size);
 
   // Create envelope
-  return new (my_mbuf->addr(offset)) envelope(type, msg_size);
+  return new (src_mbuf->addr(offset)) envelope(type, msg_size);
 }
 
-__device__ void charm::send_local_msg(envelope* env, size_t offset, int dst_local_rank) {
+__device__ void charm::send_local_msg(envelope* env, size_t offset, int dst_pe) {
   int src_local_rank = blockIdx.x;
-  // Message local to this device
-  volatile int* src_send_status_local = send_status_local
+  int dst_local_rank = get_local_rank_from_pe(dst_pe);
+  volatile int* send_status = send_status_local
     + LOCAL_MSG_MAX * c_n_sms * src_local_rank + LOCAL_MSG_MAX * dst_local_rank;
 
   // Find and reserve free message index
-  int free_idx = find_signal_block(src_send_status_local, LOCAL_MSG_MAX, SIGNAL_FREE,
+  int free_idx = find_signal_block(send_status, LOCAL_MSG_MAX, SIGNAL_FREE,
       SIGNAL_USED, true);
 
   if (threadIdx.x == 0) {
-    PDEBUG("Local rank %d sending message to local rank %d at index %d: "
-        "env %p, msgtype %d, size %llu",
-        src_local_rank, dst_local_rank, free_idx, env, env->type, env->size);
+    PDEBUG("%s %d (local rank %d) sending local message: dst PE %d (local rank %d), "
+        "index %d, env %p, msgtype %d, size %llu\n", s_mem[s_idx::is_pe] ? "PE" : "CE",
+        s_mem[s_idx::is_pe] ? (int)s_mem[s_idx::my_pe] : (int)s_mem[s_idx::my_ce],
+        src_local_rank, dst_pe, dst_local_rank, free_idx, env, env->type, env->size);
 
     // Atomically store composite in receiver
-    volatile atomic64_t* dst_recv_comp_local = recv_comp_local
+    volatile atomic64_t* recv_comp = recv_comp_local
       + LOCAL_MSG_MAX * c_n_sms * dst_local_rank + LOCAL_MSG_MAX * src_local_rank;
     composite_t comp(offset, env->size);
-    atomic64_t ret = atomicCAS((atomic64_t*)&dst_recv_comp_local[free_idx], 0,
+    atomic64_t ret = atomicCAS((atomic64_t*)&recv_comp[free_idx], 0,
         (atomic64_t)comp.data);
     assert(ret == 0);
 
+#ifndef NO_CLEANUP
     // Store composite for later cleanup
-    uint64_t* src_send_comp_local = send_comp_local
+    uint64_t* send_comp = send_comp_local
       + LOCAL_MSG_MAX * c_n_sms * src_local_rank + LOCAL_MSG_MAX * dst_local_rank;
-    src_send_comp_local[free_idx] = comp.data;
+    send_comp[free_idx] = comp.data;
+#endif
   }
   __syncthreads();
 }
 
 __device__ void charm::send_remote_msg(envelope* env, size_t offset, int dst_pe) {
   int src_ce = s_mem[s_idx::my_ce];
-  int src_ce_dev = src_ce % (c_n_clusters_dev * c_n_ces_cluster);
+  int src_ce_dev = get_ce_dev(src_ce);
   int dst_ce = get_ce_from_pe(dst_pe);
-  int dst_ce_dev = dst_ce % (c_n_clusters_dev * c_n_ces_cluster);
+  int dst_ce_dev = get_ce_dev(dst_ce);
 
   // Obtain a message index for the target CE and set signal to used
   uint64_t* send_status = send_status_remote + (REMOTE_MSG_MAX * c_n_ces) * src_ce_dev
@@ -660,14 +650,15 @@ __device__ void charm::send_reg_msg(int chare_id, int chare_idx, int ep_id,
 __device__ void charm::send_ce_msg(request_msg* req) {
   // Prepare message for sending remotely
   if (threadIdx.x == 0) {
-    envelope* env = create_envelope(msgtype::regular, req->payload_size,
+    envelope* env = create_envelope(msgtype::forward, req->payload_size,
         (size_t&)s_mem[s_idx::offset]);
 
-    regular_msg* msg = new ((char*)env + sizeof(envelope)) regular_msg(
-        req->chare_id, req->chare_idx, req->ep_id);
+    forward_msg* msg = new ((char*)env + sizeof(envelope)) forward_msg(
+        req->chare_id, req->chare_idx, req->ep_id, (size_t)s_mem[s_idx::offset],
+        req->dst_pe);
 
     if (req->payload_size > 0) {
-      s_mem[s_idx::dst] = (uint64_t)((char*)msg + sizeof(regular_msg));
+      s_mem[s_idx::dst] = (uint64_t)((char*)msg + sizeof(forward_msg));
       s_mem[s_idx::src] = (uint64_t)req->buf;
       s_mem[s_idx::size] = (uint64_t)req->payload_size;
     }

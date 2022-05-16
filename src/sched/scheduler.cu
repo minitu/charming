@@ -45,6 +45,19 @@ __device__ msgtype charm::process_msg_pe(void* addr, ssize_t* processed_size,
 
     chare_proxy->call(msg->chare_idx, msg->ep_id, payload);
 
+  } else if (type == msgtype::forward) {
+    // Forwarded from CE
+    forward_msg* msg = (forward_msg*)((char*)env + sizeof(envelope));
+    if (threadIdx.x == 0) {
+      PDEBUG("PE %d forward msg chare ID %d chare idx %d EP ID %d\n", my_pe,
+          msg->chare_id, msg->chare_idx, msg->ep_id);
+    }
+
+    chare_proxy_base*& chare_proxy = my_proxy_table.proxies[msg->chare_id];
+    void* payload = (char*)msg + sizeof(forward_msg);
+
+    chare_proxy->call(msg->chare_idx, msg->ep_id, payload);
+
   } else if (type == msgtype::begin_terminate) {
     // TODO
     // Should only be received by PE 0
@@ -93,23 +106,8 @@ __device__ msgtype charm::process_msg_ce(void* addr, ssize_t* processed_size,
   }
   __syncthreads();
 
-  chare_proxy_table& my_proxy_table = proxy_tables[blockIdx.x];
-
-  if (type == msgtype::regular || type == msgtype::user) {
-    // TODO
-    // Regular message (including user message)
-    regular_msg* msg = (regular_msg*)((char*)env + sizeof(envelope));
-    if (threadIdx.x == 0) {
-      PDEBUG("PE %d regular msg chare ID %d chare idx %d EP ID %d\n", my_pe,
-          msg->chare_id, msg->chare_idx, msg->ep_id);
-    }
-
-    chare_proxy_base*& chare_proxy = my_proxy_table.proxies[msg->chare_id];
-    void* payload = (char*)msg + sizeof(regular_msg);
-
-    chare_proxy->call(msg->chare_idx, msg->ep_id, payload);
-
-  } else if (type == msgtype::request) {
+  // TODO: User message
+  if (type == msgtype::request) {
     // Only CEs would receive requests
     request_msg* msg = (request_msg*)((char*)env + sizeof(envelope));
     if (threadIdx.x == 0) {
@@ -122,15 +120,26 @@ __device__ msgtype charm::process_msg_ce(void* addr, ssize_t* processed_size,
     // Send remote message to CE responsible for target PE
     send_ce_msg(msg);
 
+  } else if (type == msgtype::forward) {
+    // Message from another CE, need to forward to the right PE
+    forward_msg* msg = (forward_msg*)((char*)env + sizeof(envelope));
+    if (threadIdx.x == 0) {
+      PDEBUG("CE %d forward msg offset %llu dst PE %d chare ID %d chare idx %d EP ID %d\n",
+          my_ce, msg->offset, msg->dst_pe, msg->chare_id, msg->chare_idx, msg->ep_id);
+    }
+
+    // Forward message to target PE
+    send_local_msg(env, msg->offset, msg->dst_pe);
+
   } else if (type == msgtype::begin_terminate) {
     // TODO
     // Should only be received by PE 0
-    assert(my_pe == 0);
+    assert(my_ce == 0);
 
     // Begin termination message
     if (!begin_term_flag) {
       if (threadIdx.x == 0) {
-        PDEBUG("PE %d begin terminate msg\n", my_pe);
+        PDEBUG("CE %d begin terminate msg\n", my_ce);
         begin_term_flag = true;
       }
       __syncthreads();
@@ -144,14 +153,14 @@ __device__ msgtype charm::process_msg_ce(void* addr, ssize_t* processed_size,
     // TODO
     // Do termination message
     if (threadIdx.x == 0) {
-      PDEBUG("PE %d do terminate msg\n", my_pe);
+      PDEBUG("CE %d do terminate msg\n", my_ce);
       do_term_flag = true;
     }
     __syncthreads();
 
   } else {
     if (threadIdx.x == 0) {
-      PERROR("PE %d unrecognized message type %d\n", my_pe, type);
+      PERROR("CE %d unrecognized message type %d\n", my_ce, type);
     }
     assert(false);
   }
@@ -160,10 +169,22 @@ __device__ msgtype charm::process_msg_ce(void* addr, ssize_t* processed_size,
 }
 
 
-__device__ __forceinline__ void loop(comm* c) {
+__device__ __forceinline__ void loop_pe(comm* c) {
+  c->process_local();
+#ifndef NO_CLEANUP
+  c->cleanup_local();
+  c->cleanup_heap();
+#endif
+}
+
+__device__ __forceinline__ void loop_ce(comm* c) {
   c->process_local();
   c->process_remote();
-  c->cleanup();
+#ifndef NO_CLEANUP
+  c->cleanup_local();
+  c->cleanup_remote();
+  c->cleanup_heap();
+#endif
 }
 
 __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
@@ -206,7 +227,6 @@ __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
   }
   grid.sync();
 
-  /*
   int my_pe = s_mem[s_idx::my_pe];
   if (my_pe == 0) {
     // Execute user's main function
@@ -220,10 +240,15 @@ __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
   grid.sync();
 
   // Loop until termination
-  do {
-    loop(c);
-  } while (!c->do_term_flag);
-  */
+  if (s_mem[s_idx::is_pe]) {
+    do {
+      loop_pe(c);
+    } while (!c->do_term_flag);
+  } else {
+    do {
+      loop_ce(c);
+    } while (!c->do_term_flag);
+  }
 
   // Global synchronization
   if (gid == 0) {
@@ -232,6 +257,7 @@ __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
   grid.sync();
 
   if (threadIdx.x == 0) {
-    PDEBUG("PE %d terminating...\n", my_pe);
+    PDEBUG("%s %d terminating...\n", s_mem[s_idx::is_pe] ? "PE" : "CE",
+        s_mem[s_idx::is_pe] ? (int)s_mem[s_idx::my_pe] : (int)s_mem[s_idx::my_ce]);
   }
 }
