@@ -19,16 +19,14 @@ extern __device__ __managed__ chare_proxy_table* proxy_tables;
 // GPU shared memory
 extern __shared__ uint64_t s_mem[];
 
-__device__ msgtype charm::process_msg_pe(void* addr, ssize_t* processed_size,
+__device__ msgtype charm::process_msg_pe(void* addr, size_t offset,
     bool& begin_term_flag, bool& do_term_flag) {
   int my_pe = s_mem[s_idx::my_pe];
   envelope* env = (envelope*)addr;
   msgtype type = env->type;
   if (threadIdx.x == 0) {
-    if (processed_size) *processed_size = env->size;
     PDEBUG("PE %d processing msg type %d size %llu\n", my_pe, type, env->size);
   }
-  __syncthreads();
 
   chare_proxy_table& my_proxy_table = proxy_tables[blockIdx.x];
 
@@ -95,23 +93,21 @@ __device__ msgtype charm::process_msg_pe(void* addr, ssize_t* processed_size,
   return type;
 }
 
-__device__ msgtype charm::process_msg_ce(void* addr, ssize_t* processed_size,
+__device__ msgtype charm::process_msg_ce(void* addr, size_t offset,
     bool& begin_term_flag, bool& do_term_flag) {
   int my_ce = s_mem[s_idx::my_ce];
   envelope* env = (envelope*)addr;
   msgtype type = env->type;
   if (threadIdx.x == 0) {
-    if (processed_size) *processed_size = env->size;
-    PDEBUG("CE %d processing msg type %d size %llu", my_ce, type, env->size);
+    PDEBUG("CE %d processing msg type %d size %llu\n", my_ce, type, env->size);
   }
-  __syncthreads();
 
   // TODO: User message
   if (type == msgtype::request) {
     // Only CEs would receive requests
     request_msg* msg = (request_msg*)((char*)env + sizeof(envelope));
     if (threadIdx.x == 0) {
-      PDEBUG("CE %d request msg chare ID %d chare idx %d EP ID %d msgtype %d"
+      PDEBUG("CE %d request msg chare ID %d chare idx %d EP ID %d msgtype %d "
           "buf %p payload_size %llu dst PE %d\n", my_ce, msg->chare_id,
           msg->chare_idx, msg->ep_id, msg->type, msg->buf, msg->payload_size,
           msg->dst_pe);
@@ -125,11 +121,12 @@ __device__ msgtype charm::process_msg_ce(void* addr, ssize_t* processed_size,
     forward_msg* msg = (forward_msg*)((char*)env + sizeof(envelope));
     if (threadIdx.x == 0) {
       PDEBUG("CE %d forward msg offset %llu dst PE %d chare ID %d chare idx %d EP ID %d\n",
-          my_ce, msg->offset, msg->dst_pe, msg->chare_id, msg->chare_idx, msg->ep_id);
+          my_ce, offset, msg->dst_pe, msg->chare_id, msg->chare_idx, msg->ep_id);
     }
 
     // Forward message to target PE
-    send_local_msg(env, msg->offset, msg->dst_pe);
+    int dst_local_rank = get_local_rank_from_pe(msg->dst_pe);
+    send_local_msg(env, offset, dst_local_rank);
 
   } else if (type == msgtype::begin_terminate) {
     // TODO

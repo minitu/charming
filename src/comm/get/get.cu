@@ -278,8 +278,9 @@ __device__ void charm::comm::process_local() {
     __syncthreads();
 
     // Process message in parallel
-    msgtype type = is_pe ? process_msg_pe(env, nullptr, begin_term_flag, do_term_flag)
-      : process_msg_ce(env, nullptr, begin_term_flag, do_term_flag);
+    msgtype type = is_pe ?
+      process_msg_pe(env, comp.offset(), begin_term_flag, do_term_flag)
+      : process_msg_ce(env, comp.offset(), begin_term_flag, do_term_flag);
 
     // Signal sender for cleanup
     if (threadIdx.x == 0 && type != msgtype::user) {
@@ -361,6 +362,7 @@ __device__ void charm::comm::process_remote() {
         // TODO: Make asynchronous
         dst_addr = dst_mbuf->addr(dst_offset);
         s_mem[s_idx::dst] = (uint64_t)dst_addr;
+        s_mem[s_idx::offset] = (uint64_t)dst_offset;
         src_ce_dev = get_ce_dev(src_ce);
         src_dev = get_dev_from_ce(src_ce);
         nvshmem_char_get((char*)dst_addr, (char*)dst_mbuf->addr(src_offset),
@@ -371,9 +373,10 @@ __device__ void charm::comm::process_remote() {
       }
       __syncthreads();
       dst_addr = (void*)s_mem[s_idx::dst];
+      dst_offset = (size_t)s_mem[s_idx::offset];
 
       // Process message in parallel
-      msgtype type = process_msg_ce(dst_addr, nullptr, begin_term_flag, do_term_flag);
+      msgtype type = process_msg_ce(dst_addr, dst_offset, begin_term_flag, do_term_flag);
 
       if (threadIdx.x == 0) {
         // Clear message request
@@ -388,7 +391,11 @@ __device__ void charm::comm::process_remote() {
 #ifndef NO_CLEANUP
         // Store composite to be cleared from memory
         composite_t dst_composite(dst_offset, msg_size);
-        addr_heap.push(dst_composite);
+        // Forwarded message should not be freed here
+        // It will be freed as a local message once it arrives on the destination PE
+        if (type != msgtype::forward) {
+          addr_heap.push(dst_composite);
+        }
         signal = (type == msgtype::user) ? SIGNAL_FREE : SIGNAL_CLUP;
         PDEBUG("CE %d flagging remote message for cleanup: signal %d, "
             "offset %llu, size %llu, src CE %d, idx %llu\n", dst_ce, signal,
@@ -541,9 +548,8 @@ __device__ envelope* charm::create_envelope(msgtype type, size_t payload_size,
   return new (src_mbuf->addr(offset)) envelope(type, msg_size);
 }
 
-__device__ void charm::send_local_msg(envelope* env, size_t offset, int dst_pe) {
+__device__ void charm::send_local_msg(envelope* env, size_t offset, int dst_local_rank) {
   int src_local_rank = blockIdx.x;
-  int dst_local_rank = get_local_rank_from_pe(dst_pe);
   volatile int* send_status = send_status_local
     + LOCAL_MSG_MAX * c_n_sms * src_local_rank + LOCAL_MSG_MAX * dst_local_rank;
 
@@ -552,10 +558,10 @@ __device__ void charm::send_local_msg(envelope* env, size_t offset, int dst_pe) 
       SIGNAL_USED, true);
 
   if (threadIdx.x == 0) {
-    PDEBUG("%s %d (local rank %d) sending local message: dst PE %d (local rank %d), "
+    PDEBUG("%s %d (local rank %d) sending local message: dst local rank %d, "
         "index %d, env %p, msgtype %d, size %llu\n", s_mem[s_idx::is_pe] ? "PE" : "CE",
         s_mem[s_idx::is_pe] ? (int)s_mem[s_idx::my_pe] : (int)s_mem[s_idx::my_ce],
-        src_local_rank, dst_pe, dst_local_rank, free_idx, env, env->type, env->size);
+        src_local_rank, dst_local_rank, free_idx, env, env->type, env->size);
 
     // Atomically store composite in receiver
     volatile atomic64_t* recv_comp = recv_comp_local
@@ -580,6 +586,7 @@ __device__ void charm::send_remote_msg(envelope* env, size_t offset, int dst_pe)
   int src_ce_dev = get_ce_dev(src_ce);
   int dst_ce = get_ce_from_pe(dst_pe);
   int dst_ce_dev = get_ce_dev(dst_ce);
+  int dst_dev = get_dev_from_ce(dst_ce);
 
   // Obtain a message index for the target CE and set signal to used
   uint64_t* send_status = send_status_remote + (REMOTE_MSG_MAX * c_n_ces) * src_ce_dev
@@ -593,9 +600,12 @@ __device__ void charm::send_remote_msg(envelope* env, size_t offset, int dst_pe)
     + REMOTE_MSG_MAX * src_ce;
   composite_t src_composite(offset, env->size);
   nvshmemx_signal_op(recv_comp + msg_idx, src_composite.data, NVSHMEM_SIGNAL_SET,
-      get_dev_from_ce(dst_ce));
-  PDEBUG("CE %d sending remote message: offset %llu, size %llu, dst PE %d (dst CE %d), idx %llu\n",
-      src_ce, offset, env->size, dst_pe, dst_ce, msg_idx);
+      dst_dev);
+  if (threadIdx.x == 0) {
+    PDEBUG("CE %d sending remote message: offset %llu, size %llu, dst PE %d (dst CE %d), idx %llu\n",
+        src_ce, offset, env->size, dst_pe, dst_ce, msg_idx);
+  }
+  __syncthreads();
 
 #ifndef NO_CLEANUP
   // Store source composite for later cleanup
@@ -624,6 +634,7 @@ __device__ void charm::send_reg_msg(int chare_id, int chare_idx, int ep_id,
         s_mem[s_idx::src] = (uint64_t)buf;
       }
       s_mem[s_idx::size] = (uint64_t)payload_size;
+      s_mem[s_idx::local_rank] = (uint64_t)get_local_rank_from_pe(dst_pe);
     } else {
       // Need to send to another device
       // Create and send request to CE
@@ -632,6 +643,8 @@ __device__ void charm::send_reg_msg(int chare_id, int chare_idx, int ep_id,
       request_msg* msg = new((char*)env + sizeof(envelope)) request_msg(
           chare_id, chare_idx, ep_id, msgtype::regular, buf, payload_size, dst_pe);
       s_mem[s_idx::size] = 0;
+      int my_ce = get_ce_from_pe((int)s_mem[s_idx::my_pe]);
+      s_mem[s_idx::local_rank] = (uint64_t)get_local_rank_from_ce(my_ce);
     }
     s_mem[s_idx::env] = (uint64_t)env;
   }
@@ -643,10 +656,12 @@ __device__ void charm::send_reg_msg(int chare_id, int chare_idx, int ep_id,
         (size_t)s_mem[s_idx::size]);
   }
 
-  send_local_msg((envelope*)s_mem[s_idx::env], (size_t)s_mem[s_idx::offset], dst_pe);
+  // Send a local message either directly to dst PE or to a responsible CE
+  send_local_msg((envelope*)s_mem[s_idx::env], (size_t)s_mem[s_idx::offset],
+      (int)s_mem[s_idx::local_rank]);
 }
 
-// TODO: Only supports regular messages
+// TODO: Only supports requests
 __device__ void charm::send_ce_msg(request_msg* req) {
   // Prepare message for sending remotely
   if (threadIdx.x == 0) {
@@ -654,14 +669,16 @@ __device__ void charm::send_ce_msg(request_msg* req) {
         (size_t&)s_mem[s_idx::offset]);
 
     forward_msg* msg = new ((char*)env + sizeof(envelope)) forward_msg(
-        req->chare_id, req->chare_idx, req->ep_id, (size_t)s_mem[s_idx::offset],
-        req->dst_pe);
+        req->chare_id, req->chare_idx, req->ep_id, req->dst_pe);
 
     if (req->payload_size > 0) {
       s_mem[s_idx::dst] = (uint64_t)((char*)msg + sizeof(forward_msg));
       s_mem[s_idx::src] = (uint64_t)req->buf;
       s_mem[s_idx::size] = (uint64_t)req->payload_size;
     }
+    s_mem[s_idx::env] = (uint64_t)env;
+
+    printf("!!! CE %d msg->dst_pe: %d\n", (int)s_mem[s_idx::my_ce], msg->dst_pe);
   }
   __syncthreads();
 

@@ -38,6 +38,7 @@ enum s_idx : int {
   size = 2,
   env = 3,
   offset = 4,
+  local_rank = 5,
   is_pe = 8,
   my_pe = 9,
   my_ce = 10

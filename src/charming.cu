@@ -69,11 +69,11 @@ int main(int argc, char* argv[]) {
   cudaDeviceProp prop;
   cudaGetDeviceProperties(&prop, 0);
   //int max_threads_tb = prop.maxThreadsPerBlock;
-  int h_n_sms = prop.multiProcessorCount;
-  //int h_n_sms = 1;
-  int h_n_clusters_dev = 4;
+  //int h_n_sms = prop.multiProcessorCount;
+  int h_n_sms = 2;
+  int h_n_clusters_dev = 1;
   int h_cluster_size = h_n_sms / h_n_clusters_dev;
-  int h_n_ces_cluster = 2;
+  int h_n_ces_cluster = 1;
   int h_n_pes_cluster = h_cluster_size - h_n_ces_cluster;
   int h_my_dev = nvshmem_my_pe();
   int h_my_dev_node = nvshmem_team_my_pe(NVSHMEMX_TEAM_NODE);
@@ -192,9 +192,9 @@ int main(int argc, char* argv[]) {
   cuda_check_error();
   if (h_my_dev == 0) {
     PINFO("Initiating CharminG\n");
-    PINFO("PEs: %d, GPU Devices: %d, Nodes: %d\n", h_n_pes, h_n_devs, h_n_nodes);
-    PINFO("PE Clusters: %d (%d PEs, %d CEs per cluster)\n", h_n_clusters_dev,
-        h_n_pes_cluster * h_n_devs, h_n_ces_cluster);
+    PINFO("PEs: %d, GPU devices: %d, Nodes: %d\n", h_n_pes, h_n_devs, h_n_nodes);
+    PINFO("PE Clusters per device: %d (%d PEs, %d CEs per cluster)\n",
+        h_n_clusters_dev, h_n_pes_cluster, h_n_ces_cluster);
     PINFO("Thread grid: %d x %d x %d, Thread block: %d x %d x %d\n",
         grid_dim.x, grid_dim.y, grid_dim.z, block_dim.x, block_dim.y, block_dim.z);
     PINFO("Stack size: %llu Bytes, Heap size: %llu Bytes\n", stack_size, heap_size);

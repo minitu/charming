@@ -40,12 +40,10 @@ struct alignas(ALIGN_SIZE) request_msg : regular_msg {
 
 // Message sent between CEs and forwarded to target PE
 struct alignas(ALIGN_SIZE) forward_msg : regular_msg {
-  alignas(ALIGN_SIZE) size_t offset;
   alignas(ALIGN_SIZE) int dst_pe;
 
-  __device__ forward_msg(int chare_id_, int chare_idx_, int ep_id_,
-      size_t offset_, int dst_pe_)
-    : regular_msg(chare_id_, chare_idx_, ep_id_), offset(offset_), dst_pe(dst_pe_) {}
+  __device__ forward_msg(int chare_id_, int chare_idx_, int ep_id_, int dst_pe_)
+    : regular_msg(chare_id_, chare_idx_, ep_id_), dst_pe(dst_pe_) {}
 };
 
 // TODO: Is alignment too aggressive? Otherwise we observe segfaults
@@ -89,7 +87,7 @@ struct alignas(ALIGN_SIZE) message {
 
 __device__ envelope* create_envelope(msgtype type, size_t payload_size,
     size_t& offset);
-__device__ void send_local_msg(envelope* env, size_t offset, int dst_pe);
+__device__ void send_local_msg(envelope* env, size_t offset, int dst_local_rank);
 __device__ void send_remote_msg(envelope* env, size_t offset, int dst_pe);
 __device__ void send_reg_msg(int chare_id, int chare_idx, int ep_id, void* buf,
     size_t payload_size, int dst_pe);
