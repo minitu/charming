@@ -61,6 +61,10 @@ struct alignas(ALIGN_SIZE) envelope {
       type_size += sizeof(regular_msg);
     } else if (type == msgtype::request) {
       type_size += sizeof(request_msg);
+    } else if (type == msgtype::forward) {
+      type_size += sizeof(forward_msg);
+    } else {
+      assert(false);
     }
 
     // Need to satisfy alignment

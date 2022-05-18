@@ -582,37 +582,38 @@ __device__ void charm::send_local_msg(envelope* env, size_t offset, int dst_loca
 }
 
 __device__ void charm::send_remote_msg(envelope* env, size_t offset, int dst_pe) {
-  int src_ce = s_mem[s_idx::my_ce];
-  int src_ce_dev = get_ce_dev(src_ce);
-  int dst_ce = get_ce_from_pe(dst_pe);
-  int dst_ce_dev = get_ce_dev(dst_ce);
-  int dst_dev = get_dev_from_ce(dst_ce);
-
-  // Obtain a message index for the target CE and set signal to used
-  uint64_t* send_status = send_status_remote + (REMOTE_MSG_MAX * c_n_ces) * src_ce_dev
-    + REMOTE_MSG_MAX * dst_ce;
-  size_t msg_idx = nvshmem_uint64_wait_until_any(send_status, REMOTE_MSG_MAX,
-      nullptr, NVSHMEM_CMP_EQ, SIGNAL_FREE);
-  nvshmemx_signal_op(send_status + msg_idx, SIGNAL_USED, NVSHMEM_SIGNAL_SET, c_my_dev);
-
-  // Send composite
-  uint64_t* recv_comp = recv_comp_remote + (REMOTE_MSG_MAX * c_n_ces) * dst_ce_dev
-    + REMOTE_MSG_MAX * src_ce;
-  composite_t src_composite(offset, env->size);
-  nvshmemx_signal_op(recv_comp + msg_idx, src_composite.data, NVSHMEM_SIGNAL_SET,
-      dst_dev);
   if (threadIdx.x == 0) {
-    PDEBUG("CE %d sending remote message: offset %llu, size %llu, dst PE %d (dst CE %d), idx %llu\n",
+    int src_ce = s_mem[s_idx::my_ce];
+    int src_ce_dev = get_ce_dev(src_ce);
+    int dst_ce = get_ce_from_pe(dst_pe);
+    int dst_ce_dev = get_ce_dev(dst_ce);
+    int dst_dev = get_dev_from_ce(dst_ce);
+
+    // Obtain a message index for the target CE and set signal to used
+    uint64_t* send_status = send_status_remote + (REMOTE_MSG_MAX * c_n_ces) * src_ce_dev
+      + REMOTE_MSG_MAX * dst_ce;
+    size_t msg_idx = nvshmem_uint64_wait_until_any(send_status, REMOTE_MSG_MAX,
+        nullptr, NVSHMEM_CMP_EQ, SIGNAL_FREE);
+    nvshmemx_signal_op(send_status + msg_idx, SIGNAL_USED, NVSHMEM_SIGNAL_SET, c_my_dev);
+
+    // Send composite
+    uint64_t* recv_comp = recv_comp_remote + (REMOTE_MSG_MAX * c_n_ces) * dst_ce_dev
+      + REMOTE_MSG_MAX * src_ce;
+    composite_t src_composite(offset, env->size);
+    nvshmemx_signal_op(recv_comp + msg_idx, src_composite.data, NVSHMEM_SIGNAL_SET,
+        dst_dev);
+    PDEBUG("CE %d sending remote message: offset %llu, size %llu, "
+        "dst PE %d (dst CE %d), idx %llu\n",
         src_ce, offset, env->size, dst_pe, dst_ce, msg_idx);
-  }
-  __syncthreads();
 
 #ifndef NO_CLEANUP
-  // Store source composite for later cleanup
-  uint64_t* send_comp = send_comp_remote + (REMOTE_MSG_MAX * c_n_ces) * src_ce_dev
-    + REMOTE_MSG_MAX * dst_ce;
-  send_comp[msg_idx] = src_composite.data;
+    // Store source composite for later cleanup
+    uint64_t* send_comp = send_comp_remote + (REMOTE_MSG_MAX * c_n_ces) * src_ce_dev
+      + REMOTE_MSG_MAX * dst_ce;
+    send_comp[msg_idx] = src_composite.data;
 #endif
+  }
+  __syncthreads();
 }
 
 __device__ void charm::send_reg_msg(int chare_id, int chare_idx, int ep_id,
@@ -677,8 +678,6 @@ __device__ void charm::send_ce_msg(request_msg* req) {
       s_mem[s_idx::size] = (uint64_t)req->payload_size;
     }
     s_mem[s_idx::env] = (uint64_t)env;
-
-    printf("!!! CE %d msg->dst_pe: %d\n", (int)s_mem[s_idx::my_ce], msg->dst_pe);
   }
   __syncthreads();
 
