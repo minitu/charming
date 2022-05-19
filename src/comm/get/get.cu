@@ -426,10 +426,10 @@ __device__ void charm::comm::cleanup_local() {
     composite_t comp(send_comp[clup_idx]);
     addr_heap.push(comp);
     PDEBUG("%s %d cleanup_local push to heap: "
-        "offset %llu, size %llu, dst local rank %d, idx %d\n",
+        "offset %llu, size %llu, dst local rank %d, msg idx %d\n",
         s_mem[s_idx::is_pe] ? "PE" : "CE",
         s_mem[s_idx::is_pe] ? (int)s_mem[s_idx::my_pe] : (int)s_mem[s_idx::my_ce],
-        local_rank, comp.offset(), comp.size(), clup_idx / LOCAL_MSG_MAX,
+        comp.offset(), comp.size(), clup_idx / LOCAL_MSG_MAX,
         clup_idx % LOCAL_MSG_MAX);
   }
   __syncthreads();
@@ -564,7 +564,7 @@ __device__ void charm::send_local_msg(envelope* env, size_t offset, int dst_loca
     PDEBUG("%s %d sending local message: dst local rank %d, "
         "index %d, env %p, msgtype %d, size %llu\n", s_mem[s_idx::is_pe] ? "PE" : "CE",
         s_mem[s_idx::is_pe] ? (int)s_mem[s_idx::my_pe] : (int)s_mem[s_idx::my_ce],
-        src_local_rank, dst_local_rank, free_idx, env, env->type, env->size);
+        dst_local_rank, free_idx, env, env->type, env->size);
 
     // Atomically store composite in receiver
     volatile atomic64_t* recv_comp = recv_comp_local
