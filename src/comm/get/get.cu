@@ -254,8 +254,8 @@ __device__ __forceinline__ atomic64_t find_msg_block(volatile atomic64_t* comps,
 
 __device__ void charm::comm::process_local() {
   int dst_local_rank = blockIdx.x;
-#ifdef DEBUG
   bool is_pe = (s_mem[s_idx::is_pe] == 1);
+#ifdef DEBUG
   int dst_elem = is_pe ? s_mem[s_idx::my_pe] : s_mem[s_idx::my_ce];
 #endif
 

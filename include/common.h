@@ -32,17 +32,19 @@ extern __constant__ int c_n_ces;
 extern __constant__ int c_n_ces_node;
 
 // Indices into shared memory
-enum s_idx : int {
-  dst = 0,
-  src = 1,
-  size = 2,
-  env = 3,
-  offset = 4,
-  local_rank = 5,
-  is_pe = 8,
-  my_pe = 9,
-  my_ce = 10
-};
+namespace s_idx {
+  enum : int {
+    dst = 0,
+    src = 1,
+    size = 2,
+    env = 3,
+    offset = 4,
+    local_rank = 5,
+    is_pe = 8,
+    my_pe = 9,
+    my_ce = 10
+  };
+}
 
 __device__ __forceinline__ int get_local_rank_from_pe(int pe) {
   int pe_dev = pe % (c_n_clusters_dev * c_n_pes_cluster);
