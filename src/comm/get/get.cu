@@ -254,8 +254,8 @@ __device__ __forceinline__ atomic64_t find_msg_block(volatile atomic64_t* comps,
 
 __device__ void charm::comm::process_local() {
   int dst_local_rank = blockIdx.x;
-  bool is_pe = (s_mem[s_idx::is_pe] == 1);
 #ifdef DEBUG
+  bool is_pe = (s_mem[s_idx::is_pe] == 1);
   int dst_elem = is_pe ? s_mem[s_idx::my_pe] : s_mem[s_idx::my_ce];
 #endif
 
@@ -284,18 +284,19 @@ __device__ void charm::comm::process_local() {
 
     // Signal sender for cleanup
     if (threadIdx.x == 0 && type != msgtype::user) {
-      PDEBUG("%s %d signaling local cleanup (env %p, msgtype %d, size %llu) "
+      PDEBUG("%s %d process_local signal cleanup (env %p, msgtype %d, size %llu) "
           "to local rank %d at index %d\n",
           is_pe ? "PE" : "CE", dst_elem, env, env->type, env->size,
           src_local_rank, clup_idx);
 
       volatile int* src_send_status = send_status_local
         + LOCAL_MSG_MAX * c_n_sms * src_local_rank + LOCAL_MSG_MAX * dst_local_rank;
-#ifdef NO_CLEANUP
-      int ret = atomicCAS((int*)&src_send_status[clup_idx], SIGNAL_USED, SIGNAL_FREE);
+#ifndef NO_CLEANUP
+      int signal = SIGNAL_CLUP;
 #else
-      int ret = atomicCAS((int*)&src_send_status[clup_idx], SIGNAL_USED, SIGNAL_CLUP);
+      int signal = SIGNAL_FREE;
 #endif
+      int ret = atomicCAS((int*)&src_send_status[clup_idx], SIGNAL_USED, signal);
       assert(ret == SIGNAL_USED);
     }
     __syncthreads();
@@ -305,7 +306,7 @@ __device__ void charm::comm::process_local() {
 __device__ void charm::comm::process_remote() {
   int dst_local_rank = blockIdx.x;
   int dst_ce = s_mem[s_idx::my_ce];
-  int dst_ce_dev = get_ce_dev(dst_ce);
+  int dst_ce_dev = get_ce_in_dev(dst_ce);
   int dst_dev = get_dev_from_ce(dst_ce);
 
   // Check if there are any incoming messages
@@ -363,7 +364,7 @@ __device__ void charm::comm::process_remote() {
         dst_addr = dst_mbuf->addr(dst_offset);
         s_mem[s_idx::dst] = (uint64_t)dst_addr;
         s_mem[s_idx::offset] = (uint64_t)dst_offset;
-        src_ce_dev = get_ce_dev(src_ce);
+        src_ce_dev = get_ce_in_dev(src_ce);
         src_dev = get_dev_from_ce(src_ce);
         nvshmem_char_get((char*)dst_addr, (char*)dst_mbuf->addr(src_offset),
             msg_size, src_dev);
@@ -397,13 +398,13 @@ __device__ void charm::comm::process_remote() {
           addr_heap.push(dst_composite);
         }
         signal = (type == msgtype::user) ? SIGNAL_FREE : SIGNAL_CLUP;
-        PDEBUG("CE %d flagging remote message for cleanup: signal %d, "
+        PDEBUG("CE %d process_remote signal cleanup & push to heap: signal %d, "
             "offset %llu, size %llu, src CE %d, idx %llu\n", dst_ce, signal,
             dst_composite.offset(), dst_composite.size(), src_ce, msg_idx);
 #endif
         // Notify sender that message has been delivered
         nvshmemx_signal_op(src_send_status + msg_idx, signal, NVSHMEM_SIGNAL_SET,
-            src_ce_dev);
+            src_dev);
       }
       __syncthreads();
     }
@@ -424,8 +425,9 @@ __device__ void charm::comm::cleanup_local() {
     uint64_t* send_comp = send_comp_local + LOCAL_MSG_MAX * c_n_sms * local_rank;
     composite_t comp(send_comp[clup_idx]);
     addr_heap.push(comp);
-    PDEBUG("%s %d (local rank %d) flagging message for cleanup: offset %llu, size %llu, "
-        "dst local rank %d, idx %d\n", s_mem[s_idx::is_pe] ? "PE" : "CE",
+    PDEBUG("%s %d cleanup_local push to heap: "
+        "offset %llu, size %llu, dst local rank %d, idx %d\n",
+        s_mem[s_idx::is_pe] ? "PE" : "CE",
         s_mem[s_idx::is_pe] ? (int)s_mem[s_idx::my_pe] : (int)s_mem[s_idx::my_ce],
         local_rank, comp.offset(), comp.size(), clup_idx / LOCAL_MSG_MAX,
         clup_idx % LOCAL_MSG_MAX);
@@ -434,8 +436,8 @@ __device__ void charm::comm::cleanup_local() {
 }
 
 __device__ void charm::comm::cleanup_remote() {
-  int my_ce_dev = get_ce_dev(s_mem[s_idx::my_ce]);
-  int my_dev = get_ce_dev(s_mem[s_idx::my_ce]);
+  int my_ce_dev = get_ce_in_dev(s_mem[s_idx::my_ce]);
+  int my_dev = get_dev_from_ce(s_mem[s_idx::my_ce]);
 
   // Check for messages that have been delivered to the destination PE
   uint64_t* send_status = send_status_remote + (REMOTE_MSG_MAX * c_n_ces) * my_ce_dev;
@@ -463,9 +465,10 @@ __device__ void charm::comm::cleanup_remote() {
         size_t found_idx = send_status_idx[i];
         composite_t src_composite(send_comp[found_idx]);
         addr_heap.push(src_composite);
-        PDEBUG("CE %d flagging sent message for cleanup: offset %llu, size %llu, "
-            "dst CE %llu, idx %llu\n", (int)s_mem[s_idx::my_ce], src_composite.offset(),
-            src_composite.size(), found_idx / REMOTE_MSG_MAX, found_idx % REMOTE_MSG_MAX);
+        PDEBUG("CE %d cleanup_remote push to heap: offset %llu, size %llu, "
+            "dst CE %llu, idx %llu, found_idx %llu\n", (int)s_mem[s_idx::my_ce],
+            src_composite.offset(), src_composite.size(),
+            found_idx / REMOTE_MSG_MAX, found_idx % REMOTE_MSG_MAX, found_idx);
 
         // Reset signal to SIGNAL_FREE
         nvshmemx_signal_op(send_status + found_idx, SIGNAL_FREE,
@@ -558,7 +561,7 @@ __device__ void charm::send_local_msg(envelope* env, size_t offset, int dst_loca
       SIGNAL_USED, true);
 
   if (threadIdx.x == 0) {
-    PDEBUG("%s %d (local rank %d) sending local message: dst local rank %d, "
+    PDEBUG("%s %d sending local message: dst local rank %d, "
         "index %d, env %p, msgtype %d, size %llu\n", s_mem[s_idx::is_pe] ? "PE" : "CE",
         s_mem[s_idx::is_pe] ? (int)s_mem[s_idx::my_pe] : (int)s_mem[s_idx::my_ce],
         src_local_rank, dst_local_rank, free_idx, env, env->type, env->size);
@@ -584,9 +587,9 @@ __device__ void charm::send_local_msg(envelope* env, size_t offset, int dst_loca
 __device__ void charm::send_remote_msg(envelope* env, size_t offset, int dst_pe) {
   if (threadIdx.x == 0) {
     int src_ce = s_mem[s_idx::my_ce];
-    int src_ce_dev = get_ce_dev(src_ce);
+    int src_ce_dev = get_ce_in_dev(src_ce);
     int dst_ce = get_ce_from_pe(dst_pe);
-    int dst_ce_dev = get_ce_dev(dst_ce);
+    int dst_ce_dev = get_ce_in_dev(dst_ce);
     int dst_dev = get_dev_from_ce(dst_ce);
 
     // Obtain a message index for the target CE and set signal to used
