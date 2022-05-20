@@ -56,27 +56,8 @@ __device__ msgtype charm::process_msg_pe(void* addr, size_t offset,
 
     chare_proxy->call(msg->chare_idx, msg->ep_id, payload);
 
-  } else if (type == msgtype::begin_terminate) {
-    // TODO
-    // Should only be received by PE 0
-    assert(my_pe == 0);
-
-    // Begin termination message
-    if (!begin_term_flag) {
-      if (threadIdx.x == 0) {
-        PDEBUG("PE %d begin terminate msg\n", my_pe);
-        begin_term_flag = true;
-      }
-      __syncthreads();
-
-      for (int pe = 0; pe < c_n_pes; pe++) {
-        send_term_msg(false, pe);
-      }
-    }
-
   } else if (type == msgtype::do_terminate) {
-    // TODO
-    // Do termination message
+    // Received message to terminate
     if (threadIdx.x == 0) {
       PDEBUG("PE %d do terminate msg\n", my_pe);
       do_term_flag = true;
@@ -94,7 +75,7 @@ __device__ msgtype charm::process_msg_pe(void* addr, size_t offset,
 }
 
 __device__ msgtype charm::process_msg_ce(void* addr, size_t offset,
-    bool& begin_term_flag, bool& do_term_flag) {
+    bool& sent_term_flag, bool& begin_term_flag, bool& do_term_flag) {
   int my_ce = s_mem[s_idx::my_ce];
   envelope* env = (envelope*)addr;
   msgtype type = env->type;
@@ -104,7 +85,7 @@ __device__ msgtype charm::process_msg_ce(void* addr, size_t offset,
 
   // TODO: User message
   if (type == msgtype::request) {
-    // Only CEs would receive requests
+    // Only CEs receive requests
     request_msg* msg = (request_msg*)((char*)env + sizeof(envelope));
     if (threadIdx.x == 0) {
       PDEBUG("CE %d request msg chare ID %d chare idx %d EP ID %d msgtype %d "
@@ -113,8 +94,18 @@ __device__ msgtype charm::process_msg_ce(void* addr, size_t offset,
           msg->dst_pe);
     }
 
-    // Send remote message to CE responsible for target PE
-    send_ce_msg(msg);
+    if (msg->type == msgtype::begin_terminate) {
+      // If a begin termination message has already been sent from this CE,
+      // don't send it again
+      if (sent_term_flag) return type;
+      if (threadIdx.x == 0) {
+        sent_term_flag = true;
+      }
+      __syncthreads();
+    }
+
+    // Send message to remote CE as delegate of source PE
+    send_delegate_msg(msg);
 
   } else if (type == msgtype::forward) {
     // Message from another CE, need to forward to the right PE
@@ -129,31 +120,36 @@ __device__ msgtype charm::process_msg_ce(void* addr, size_t offset,
     send_local_msg(env, offset, dst_local_rank);
 
   } else if (type == msgtype::begin_terminate) {
-    // TODO
-    // Should only be received by PE 0
+    // Received begin termination message
+    // Should only be received by CE 0
     assert(my_ce == 0);
 
-    // Begin termination message
-    if (!begin_term_flag) {
-      if (threadIdx.x == 0) {
-        PDEBUG("CE %d begin terminate msg\n", my_ce);
-        begin_term_flag = true;
-      }
-      __syncthreads();
+    // Check if begin_terminate message was already received
+    if (begin_term_flag) return type;
 
-      for (int pe = 0; pe < c_n_pes; pe++) {
-        send_term_msg(false, pe);
-      }
+    // Send out do_terminate messages to all CEs
+    if (threadIdx.x == 0) {
+      PDEBUG("CE %d begin terminate msg\n", my_ce);
+      begin_term_flag = true;
+    }
+    __syncthreads();
+
+    for (int ce = 0; ce < c_n_ces; ce++) {
+      send_do_term_msg_ce(ce);
     }
 
   } else if (type == msgtype::do_terminate) {
-    // TODO
-    // Do termination message
+    // Send out do_terminate messages to all child PEs
     if (threadIdx.x == 0) {
       PDEBUG("CE %d do terminate msg\n", my_ce);
       do_term_flag = true;
     }
     __syncthreads();
+
+    comm* c = (comm*)(s_mem + SMEM_CNT_MAX);
+    for (int i = 0; i < c->child_count; i++) {
+      send_do_term_msg_pe(c->child_local_ranks[i]);
+    }
 
   } else {
     if (threadIdx.x == 0) {

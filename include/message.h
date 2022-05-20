@@ -63,7 +63,9 @@ struct alignas(ALIGN_SIZE) envelope {
       type_size += sizeof(request_msg);
     } else if (type == msgtype::forward) {
       type_size += sizeof(forward_msg);
-    } else {
+    } else if (type != msgtype::begin_terminate
+        && type != msgtype::do_terminate) {
+      // TODO: User message API
       assert(false);
     }
 
@@ -95,12 +97,14 @@ __device__ void send_local_msg(envelope* env, size_t offset, int dst_local_rank)
 __device__ void send_remote_msg(envelope* env, size_t offset, int dst_pe);
 __device__ void send_reg_msg(int chare_id, int chare_idx, int ep_id, void* buf,
     size_t payload_size, int dst_pe);
-__device__ void send_ce_msg(request_msg* req);
+__device__ void send_delegate_msg(request_msg* req);
 __device__ void send_user_msg(int chare_id, int chare_idx, int ep_id,
     const message& msg);
 __device__ void send_user_msg(int chare_id, int chare_idx, int ep_id,
     const message& msg, size_t payload_size);
-__device__ void send_term_msg(bool begin, int dst_pe);
+__device__ void send_begin_term_msg();
+__device__ void send_do_term_msg_ce(int dst_ce);
+__device__ void send_do_term_msg_pe(int dst_local_rank);
 
 }
 

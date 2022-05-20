@@ -136,14 +136,33 @@ void charm::comm_fini_host() {
   cudaFree((void*)heap_buf);
 }
 
+// Single-threaded
 __device__ void charm::comm::init() {
   // Initialize min-heap
   int comp_count = LOCAL_MSG_MAX * c_n_sms * 2;
   composite_t* my_heap_buf = heap_buf + comp_count * blockIdx.x;
   addr_heap.init(my_heap_buf, comp_count);
 
+  sent_term_flag = false;
   begin_term_flag = false;
   do_term_flag = false;
+
+  if (!s_mem[s_idx::is_pe]) {
+    // Store local ranks and count of child PEs for this CE
+    child_count = 0;
+    child_local_ranks = new int[c_n_pes_cluster];
+    assert(child_local_ranks);
+
+    int my_cluster = blockIdx.x / c_cluster_size;
+    int my_rank_in_cluster = blockIdx.x % c_cluster_size;
+    int start_local_rank = my_cluster * c_cluster_size;
+    for (int i = 0; i < c_n_pes_cluster; i++) {
+      int ce_rank_in_cluster = i % c_n_ces_cluster + c_n_pes_cluster;
+      if (ce_rank_in_cluster == my_rank_in_cluster) {
+        child_local_ranks[child_count++] = start_local_rank + i;
+      }
+    }
+  }
 }
 
 __device__ __forceinline__ int find_signal_single(volatile int* status,
@@ -280,7 +299,8 @@ __device__ void charm::comm::process_local() {
     // Process message in parallel
     msgtype type = is_pe ?
       process_msg_pe(env, comp.offset(), begin_term_flag, do_term_flag)
-      : process_msg_ce(env, comp.offset(), begin_term_flag, do_term_flag);
+      : process_msg_ce(env, comp.offset(), sent_term_flag, begin_term_flag,
+          do_term_flag);
 
     // Signal sender for cleanup
     if (threadIdx.x == 0 && type != msgtype::user) {
@@ -377,7 +397,8 @@ __device__ void charm::comm::process_remote() {
       dst_offset = (size_t)s_mem[s_idx::offset];
 
       // Process message in parallel
-      msgtype type = process_msg_ce(dst_addr, dst_offset, begin_term_flag, do_term_flag);
+      msgtype type = process_msg_ce(dst_addr, dst_offset, sent_term_flag,
+          begin_term_flag, do_term_flag);
 
       if (threadIdx.x == 0) {
         // Clear message request
@@ -584,11 +605,10 @@ __device__ void charm::send_local_msg(envelope* env, size_t offset, int dst_loca
   __syncthreads();
 }
 
-__device__ void charm::send_remote_msg(envelope* env, size_t offset, int dst_pe) {
+__device__ void charm::send_remote_msg(envelope* env, size_t offset, int dst_ce) {
   if (threadIdx.x == 0) {
     int src_ce = s_mem[s_idx::my_ce];
     int src_ce_dev = get_ce_in_dev(src_ce);
-    int dst_ce = get_ce_from_pe(dst_pe);
     int dst_ce_dev = get_ce_in_dev(dst_ce);
     int dst_dev = get_dev_from_ce(dst_ce);
 
@@ -605,9 +625,8 @@ __device__ void charm::send_remote_msg(envelope* env, size_t offset, int dst_pe)
     composite_t src_composite(offset, env->size);
     nvshmemx_signal_op(recv_comp + msg_idx, src_composite.data, NVSHMEM_SIGNAL_SET,
         dst_dev);
-    PDEBUG("CE %d sending remote message: offset %llu, size %llu, "
-        "dst PE %d (dst CE %d), idx %llu\n",
-        src_ce, offset, env->size, dst_pe, dst_ce, msg_idx);
+    PDEBUG("CE %d sending remote message: offset %llu, size %llu, dst CE %d, idx %llu\n",
+        src_ce, offset, env->size, dst_ce, msg_idx);
 
 #ifndef NO_CLEANUP
     // Store source composite for later cleanup
@@ -644,7 +663,7 @@ __device__ void charm::send_reg_msg(int chare_id, int chare_idx, int ep_id,
       // Create and send request to CE
       env = create_envelope(msgtype::request, 0, (size_t&)s_mem[s_idx::offset]);
 
-      request_msg* msg = new((char*)env + sizeof(envelope)) request_msg(
+      request_msg* msg = new ((char*)env + sizeof(envelope)) request_msg(
           chare_id, chare_idx, ep_id, msgtype::regular, buf, payload_size, dst_pe);
       s_mem[s_idx::size] = 0;
       int my_ce = get_ce_from_pe((int)s_mem[s_idx::my_pe]);
@@ -665,20 +684,34 @@ __device__ void charm::send_reg_msg(int chare_id, int chare_idx, int ep_id,
       (int)s_mem[s_idx::local_rank]);
 }
 
-// TODO: Only supports requests
-__device__ void charm::send_ce_msg(request_msg* req) {
+__device__ void charm::send_delegate_msg(request_msg* req) {
   // Prepare message for sending remotely
   if (threadIdx.x == 0) {
-    envelope* env = create_envelope(msgtype::forward, req->payload_size,
-        (size_t&)s_mem[s_idx::offset]);
+    envelope* env = nullptr;
+    if (req->type == msgtype::regular) {
+      // Need to send to CE responsible for target PE
+      env = create_envelope(msgtype::forward, req->payload_size,
+          (size_t&)s_mem[s_idx::offset]);
 
-    forward_msg* msg = new ((char*)env + sizeof(envelope)) forward_msg(
-        req->chare_id, req->chare_idx, req->ep_id, req->dst_pe);
+      forward_msg* msg = new ((char*)env + sizeof(envelope)) forward_msg(
+          req->chare_id, req->chare_idx, req->ep_id, req->dst_pe);
 
-    if (req->payload_size > 0) {
-      s_mem[s_idx::dst] = (uint64_t)((char*)msg + sizeof(forward_msg));
-      s_mem[s_idx::src] = (uint64_t)req->buf;
-      s_mem[s_idx::size] = (uint64_t)req->payload_size;
+      if (req->payload_size > 0) {
+        s_mem[s_idx::dst] = (uint64_t)((char*)msg + sizeof(forward_msg));
+        s_mem[s_idx::src] = (uint64_t)req->buf;
+        s_mem[s_idx::size] = (uint64_t)req->payload_size;
+      }
+      s_mem[s_idx::dst_ce] = (uint64_t)get_ce_from_pe(req->dst_pe);
+    } else if (req->type == msgtype::begin_terminate) {
+      // Send begin termination message to CE 0
+      env = create_envelope(msgtype::begin_terminate, 0,
+          (size_t&)s_mem[s_idx::offset]);
+
+      s_mem[s_idx::dst_ce] = 0;
+    } else {
+      PERROR("CE %d invalid message type %d in send_delegate_msg\n",
+          (int)s_mem[s_idx::my_ce], req->type);
+      assert(false);
     }
     s_mem[s_idx::env] = (uint64_t)env;
   }
@@ -691,7 +724,7 @@ __device__ void charm::send_ce_msg(request_msg* req) {
   }
 
   send_remote_msg((envelope*)s_mem[s_idx::env], (size_t)s_mem[s_idx::offset],
-      req->dst_pe);
+      (int)s_mem[s_idx::dst_ce]);
 }
 
 // TODO
@@ -720,14 +753,76 @@ __device__ void charm::send_user_msg(int chare_id, int chare_idx, int ep_id,
   send_user_msg_common(chare_id, chare_idx, ep_id, msg);
 }
 
-__device__ void charm::send_term_msg(bool begin, int dst_pe) {
+__device__ void charm::send_begin_term_msg() {
+  comm* c = (comm*)(s_mem + SMEM_CNT_MAX);
+
+  // Don't do anything if message to begin termination
+  // has already been sent from this PE
+  if (c->sent_term_flag) return;
+
   if (threadIdx.x == 0) {
-    envelope* env = create_envelope(
-        begin ? msgtype::begin_terminate : msgtype::do_terminate, 0,
+    c->sent_term_flag = true;
+
+    int src_pe = s_mem[s_idx::my_pe];
+    int src_dev = get_dev_from_pe(src_pe);
+    int dst_dev = get_dev_from_ce(0);
+    envelope* env = nullptr;
+    if (src_dev == dst_dev) {
+      // CE 0 is on the same device, send directly
+      env = create_envelope(msgtype::begin_terminate, 0,
+          (size_t&)s_mem[s_idx::offset]);
+      s_mem[s_idx::local_rank] = (uint64_t)get_local_rank_from_ce(0);
+    } else {
+      // CE 0 is on a difference device, delegate to CE
+      env = create_envelope(msgtype::request, 0,
+          (size_t&)s_mem[s_idx::offset]);
+
+      request_msg* msg = new ((char*)env + sizeof(envelope)) request_msg(
+          -1, -1, -1, msgtype::begin_terminate, nullptr, 0, -1);
+      int src_ce = get_ce_from_pe(src_pe);
+      s_mem[s_idx::local_rank] = (uint64_t)get_local_rank_from_ce(src_ce);
+    }
+    s_mem[s_idx::env] = (uint64_t)env;
+  }
+  __syncthreads();
+
+  // Send message to CE 0 (either directly or indirectly)
+  send_local_msg((envelope*)s_mem[s_idx::env], (size_t)s_mem[s_idx::offset],
+      (int)s_mem[s_idx::local_rank]);
+}
+
+__device__ void charm::send_do_term_msg_ce(int dst_ce) {
+  // Prepare message
+  if (threadIdx.x == 0) {
+    envelope* env = create_envelope(msgtype::do_terminate, 0,
         (size_t&)s_mem[s_idx::offset]);
     s_mem[s_idx::env] = (uint64_t)env;
   }
   __syncthreads();
 
-  //send_msg((envelope*)s_mem[s_idx::env], (size_t)s_mem[s_idx::offset], dst_pe);
+  // Send message (dst CE could be on the same device or remote)
+  int src_ce = s_mem[s_idx::my_ce];
+  int src_dev = get_dev_from_ce(src_ce);
+  int dst_dev = get_dev_from_ce(dst_ce);
+  if (src_dev == dst_dev) {
+    send_local_msg((envelope*)s_mem[s_idx::env], (size_t)s_mem[s_idx::offset],
+        get_local_rank_from_ce(dst_ce));
+  } else {
+    send_remote_msg((envelope*)s_mem[s_idx::env], (size_t)s_mem[s_idx::offset],
+        dst_ce);
+  }
+}
+
+__device__ void charm::send_do_term_msg_pe(int dst_local_rank) {
+  // Prepare message
+  if (threadIdx.x == 0) {
+    envelope* env = create_envelope(msgtype::do_terminate, 0,
+        (size_t&)s_mem[s_idx::offset]);
+    s_mem[s_idx::env] = (uint64_t)env;
+  }
+  __syncthreads();
+
+  // Send message to child PE
+  send_local_msg((envelope*)s_mem[s_idx::env], (size_t)s_mem[s_idx::offset],
+      dst_local_rank);
 }

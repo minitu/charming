@@ -18,8 +18,11 @@ struct alignas(ALIGN_SIZE) comm {
   min_heap addr_heap;
 #endif
 
+  bool sent_term_flag;
   bool begin_term_flag;
   bool do_term_flag;
+  int* child_local_ranks;
+  int child_count;
 
   __device__ void init();
   __device__ void process_local();
