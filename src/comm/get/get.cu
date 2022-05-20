@@ -14,7 +14,11 @@
 #include "util.h"
 
 // Use custom thread block extensions to NVSHMEM
-#define NVSHMEM_BLOCK_IMPL
+#define NVSHMEM_BLOCK_EXT
+
+// Use thread block extension of NVSHMEM for communication
+// Turned off for now as it shows identical performance
+//#define NVSHMEM_BLOCK_COMM
 
 #define MBUF_PE_SIZE 8388608 // 8MB per PE
 #define MBUF_CE_SIZE 134217728 // 128MB per CE
@@ -333,7 +337,7 @@ __device__ void charm::comm::process_remote() {
   uint64_t* recv_comp = recv_comp_remote + (REMOTE_MSG_MAX * c_n_ces) * dst_ce_dev;
   size_t* recv_comp_idx = recv_comp_remote_idx + (REMOTE_MSG_MAX * c_n_ces) * dst_ce_dev;
   size_t count = 0;
-#ifdef NVSHMEM_BLOCK_IMPL
+#ifdef NVSHMEM_BLOCK_EXT
   count = nvshmem_uint64_test_some_block(recv_comp, REMOTE_MSG_MAX * c_n_ces,
       recv_comp_idx, NVSHMEM_CMP_GT, 0);
 #else
@@ -358,6 +362,7 @@ __device__ void charm::comm::process_remote() {
     size_t msg_idx;
     size_t dst_offset;
     void* dst_addr = nullptr;
+    void* src_addr = nullptr;
 
     for (size_t i = 0; i < count; i++) {
       if (threadIdx.x == 0) {
@@ -382,12 +387,18 @@ __device__ void charm::comm::process_remote() {
         // Perform a get operation to fetch the message
         // TODO: Make asynchronous
         dst_addr = dst_mbuf->addr(dst_offset);
-        s_mem[s_idx::dst] = (uint64_t)dst_addr;
-        s_mem[s_idx::offset] = (uint64_t)dst_offset;
+        src_addr = dst_mbuf->addr(src_offset);
         src_ce_dev = get_ce_in_dev(src_ce);
         src_dev = get_dev_from_ce(src_ce);
-        nvshmem_char_get((char*)dst_addr, (char*)dst_mbuf->addr(src_offset),
-            msg_size, src_dev);
+        s_mem[s_idx::dst] = (uint64_t)dst_addr;
+        s_mem[s_idx::offset] = (uint64_t)dst_offset;
+#ifdef NVSHMEM_BLOCK_COMM
+        s_mem[s_idx::src] = (uint64_t)src_addr;
+        s_mem[s_idx::size] = (uint64_t)msg_size;
+        s_mem[s_idx::dev] = (uint64_t)src_dev;
+#else
+        nvshmem_char_get((char*)dst_addr, (char*)src_addr, msg_size, src_dev);
+#endif
         PDEBUG("CE %d remote get: src offset %llu, dst offset %llu, "
             "size %llu, src CE %d, idx %llu\n", dst_ce, src_offset, dst_offset,
             msg_size, src_ce, msg_idx);
@@ -395,6 +406,12 @@ __device__ void charm::comm::process_remote() {
       __syncthreads();
       dst_addr = (void*)s_mem[s_idx::dst];
       dst_offset = (size_t)s_mem[s_idx::offset];
+#ifdef NVSHMEM_BLOCK_COMM
+      src_addr = (void*)s_mem[s_idx::src];
+      msg_size = (size_t)s_mem[s_idx::size];
+      src_dev = (int)s_mem[s_idx::dev];
+      nvshmemx_char_get_block((char*)dst_addr, (char*)src_addr, msg_size, src_dev);
+#endif
 
       // Process message in parallel
       msgtype type = process_msg_ce(dst_addr, dst_offset, sent_term_flag,
@@ -464,7 +481,7 @@ __device__ void charm::comm::cleanup_remote() {
   uint64_t* send_status = send_status_remote + (REMOTE_MSG_MAX * c_n_ces) * my_ce_dev;
   uint64_t* send_status_idx = send_status_remote_idx + (REMOTE_MSG_MAX * c_n_ces) * my_ce_dev;
   size_t count = 0;
-#ifdef NVSHMEM_BLOCK_IMPL
+#ifdef NVSHMEM_BLOCK_EXT
   count = nvshmem_uint64_test_some_block(send_status, REMOTE_MSG_MAX * c_n_ces,
       send_status_idx, NVSHMEM_CMP_EQ, SIGNAL_CLUP);
 #else

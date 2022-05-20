@@ -41,6 +41,7 @@ namespace s_idx {
     offset = 4,
     local_rank = 5,
     dst_ce = 6,
+    dev = 7,
     is_pe = 8,
     my_pe = 9,
     my_ce = 10
