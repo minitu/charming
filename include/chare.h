@@ -97,23 +97,23 @@ struct chare_proxy : chare_proxy_base {
   }
 
   // Called on all TBs before main (single-threaded)
-  __device__ void create(int n_chares) {
+  __device__ void create(int n_chares, int* block_map) {
     int n_pes = c_n_pes;
     int my_pe = s_mem[s_idx::my_pe];
-    int n_chares_pe = n_chares / n_pes;
-    int rem = n_chares % n_pes;
 
     // Allocate space for location map
     loc_map = new int[n_chares];
 
-    // Block mapping
+    // Default block mapping
+    int n_chares_pe = n_chares / n_pes;
+    int rem = n_chares % n_pes;
     int n_chares_cur = -1;
     int start = 0;
     int end = 0;
     for (int pe = 0; pe < n_pes; pe++) {
       // Calculate number of chares for this PE
-      n_chares_cur = n_chares_pe;
-      if (pe < rem) n_chares_cur++;
+      n_chares_cur = block_map ? block_map[pe] : n_chares_pe;
+      if (!block_map && pe < rem) n_chares_cur++;
 
       // Update end chare index
       end = start + n_chares_cur - 1;
@@ -142,6 +142,8 @@ struct chare_proxy : chare_proxy_base {
       start += n_chares_cur;
     }
   }
+
+  inline __device__ void create(int n_chares) { create(n_chares, nullptr); }
 
   __device__ virtual void call(int idx, int ep, void* arg) {
     assert(idx >= start_idx && idx <= end_idx);

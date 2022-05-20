@@ -4,11 +4,24 @@
 __shared__ charm::chare_proxy<Comm>* comm_proxy;
 
 __device__ void charm::create_chares(int argc, char** argv, size_t* argvs) {
+  // Create chare proxy and register entry methods
   comm_proxy = new charm::chare_proxy<Comm>();
   comm_proxy->add_entry_method<&entry_init>();
   comm_proxy->add_entry_method<&entry_init_done>();
   comm_proxy->add_entry_method<&entry_recv>();
-  comm_proxy->create(2);
+
+  // Custom block map
+  int n_pes = charm::n_pes();
+  int* block_map = new int[n_pes];
+  for (int pe = 0; pe < n_pes; pe++) {
+    block_map[pe] = 0;
+  }
+  block_map[0] = 1;
+  block_map[n_pes/2] = 1;
+
+  // Create chares
+  //comm_proxy->create(2);
+  comm_proxy->create(2, block_map);
 }
 
 __device__ void charm::main(int argc, char** argv, size_t* argvs) {
@@ -60,7 +73,7 @@ __device__ void Comm::init(void* arg) {
 #ifdef MEASURE_INVOKE
     invoke_time = 0;
 #endif
-    printf("Chare %d init\n", index);
+    printf("Chare %d init on PE %d\n", index, charm::my_pe());
   }
   __syncthreads();
 
