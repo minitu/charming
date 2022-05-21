@@ -31,8 +31,8 @@ __device__ void charm::main(int argc, char** argv, size_t* argvs) {
   if (threadIdx.x == 0) {
     // Default parameters
     params[0] = 1;
-    params[1] = 65536;
-    params[2] = 100;
+    params[1] = 1048576;
+    params[2] = 1000;
     params[3] = 10;
 
     // Process command line arguments
