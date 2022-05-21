@@ -13,12 +13,9 @@
 #include "heap.h"
 #include "util.h"
 
-// Use custom thread block extensions to NVSHMEM
-#define NVSHMEM_BLOCK_EXT
-
-// Use thread block extension of NVSHMEM for communication
-// Turned off for now as it shows identical performance
-//#define NVSHMEM_BLOCK_COMM
+#define NVSHMEM_BLOCK_EXT // Use custom thread block extensions to NVSHMEM
+//#define NVSHMEM_BLOCK_COMM // Use NVSHMEM's thread block implementation
+#define NVSHMEM_MEMCPY // Use NVSHMEM's memcpy function
 
 #define MBUF_PE_SIZE 8388608 // 8MB per PE
 #define MBUF_CE_SIZE 134217728 // 128MB per CE
@@ -692,8 +689,13 @@ __device__ void charm::send_reg_msg(int chare_id, int chare_idx, int ep_id,
 
   // Fill in payload (from regular GPU memory to NVSHMEM symmetric memory)
   if (s_mem[s_idx::size] > 0) {
+#ifdef NVSHMEM_MEMCPY
+    nvshmem_memcpy_block((void*)s_mem[s_idx::dst], (void*)s_mem[s_idx::src],
+        (size_t)s_mem[s_idx::size]);
+#else
     memcpy_kernel((void*)s_mem[s_idx::dst], (void*)s_mem[s_idx::src],
         (size_t)s_mem[s_idx::size]);
+#endif
   }
 
   // Send a local message either directly to dst PE or to a responsible CE
@@ -736,8 +738,13 @@ __device__ void charm::send_delegate_msg(request_msg* req) {
 
   // Fill in payload
   if (req->payload_size > 0) {
+#ifdef NVSHMEM_MEMCPY
+    nvshmem_memcpy_block((void*)s_mem[s_idx::dst], (void*)s_mem[s_idx::src],
+        (size_t)s_mem[s_idx::size]);
+#else
     memcpy_kernel((void*)s_mem[s_idx::dst], (void*)s_mem[s_idx::src],
         (size_t)s_mem[s_idx::size]);
+#endif
   }
 
   send_remote_msg((envelope*)s_mem[s_idx::env], (size_t)s_mem[s_idx::offset],

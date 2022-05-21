@@ -70,8 +70,7 @@ int main(int argc, char* argv[]) {
   cudaGetDeviceProperties(&prop, 0);
   //int max_threads_tb = prop.maxThreadsPerBlock;
   int h_n_sms = prop.multiProcessorCount;
-  //int h_n_sms = 2;
-  int h_n_clusters_dev = 2;
+  int h_n_clusters_dev = 1;
   int h_cluster_size = h_n_sms / h_n_clusters_dev;
   int h_n_ces_cluster = 1;
   int h_n_pes_cluster = h_cluster_size - h_n_ces_cluster;
