@@ -1,6 +1,7 @@
 #ifndef _MESSAGE_H_
 #define _MESSAGE_H_
 
+// Alignment needed to avoid misaligned address errors
 #define ALIGN_SIZE 16
 
 namespace charm {
@@ -17,9 +18,9 @@ enum class msgtype : int {
 
 // Regular message header between chares
 struct alignas(ALIGN_SIZE) regular_msg {
-  alignas(ALIGN_SIZE) int chare_id;
-  alignas(ALIGN_SIZE) int chare_idx;
-  alignas(ALIGN_SIZE) int ep_id;
+  int chare_id;
+  int chare_idx;
+  int ep_id;
 
   __device__ regular_msg(int chare_id_, int chare_idx_, int ep_id_)
     : chare_id(chare_id_), chare_idx(chare_idx_), ep_id(ep_id_) {}
@@ -27,10 +28,10 @@ struct alignas(ALIGN_SIZE) regular_msg {
 
 // Request sent from PE to CE
 struct alignas(ALIGN_SIZE) request_msg : regular_msg {
-  alignas(ALIGN_SIZE) msgtype type;
-  alignas(ALIGN_SIZE) void* buf;
-  alignas(ALIGN_SIZE) size_t payload_size;
-  alignas(ALIGN_SIZE) int dst_pe;
+  msgtype type;
+  void* buf;
+  size_t payload_size;
+  int dst_pe;
 
   __device__ request_msg(int chare_id_, int chare_idx_, int ep_id_, msgtype type_,
       void* buf_, size_t payload_size_, int dst_pe_)
@@ -40,7 +41,7 @@ struct alignas(ALIGN_SIZE) request_msg : regular_msg {
 
 // Message sent between CEs and forwarded to target PE
 struct alignas(ALIGN_SIZE) forward_msg : regular_msg {
-  alignas(ALIGN_SIZE) int dst_pe;
+  int dst_pe;
 
   __device__ forward_msg(int chare_id_, int chare_idx_, int ep_id_, int dst_pe_)
     : regular_msg(chare_id_, chare_idx_, ep_id_), dst_pe(dst_pe_) {}
@@ -48,8 +49,8 @@ struct alignas(ALIGN_SIZE) forward_msg : regular_msg {
 
 // TODO: Is alignment too aggressive? Otherwise we observe segfaults
 struct alignas(ALIGN_SIZE) envelope {
-  alignas(ALIGN_SIZE) msgtype type;
-  alignas(ALIGN_SIZE) size_t size;
+  msgtype type;
+  size_t size;
 
   __device__ envelope(msgtype type_, size_t size_)
     : type(type_), size(size_) {}
