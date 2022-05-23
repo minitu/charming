@@ -107,6 +107,9 @@ __device__ void Block::init(void* arg) {
 
     iy_end_top = (top_pe < num_ranks_low) ? chunk_size_low + 1 : chunk_size_high + 1;
     iy_start_bottom = 0;
+
+    // Set initial reference number
+    block_proxy->set_refnum(mype, iter);
   }
   __syncthreads();
 
@@ -128,8 +131,8 @@ __device__ void Block::update() {
 }
 
 __device__ void Block::send_halo() {
-  block_proxy->invoke(top_pe, 1, a_new + iy_start * nx, nx * sizeof(real));
-  block_proxy->invoke(bottom_pe, 1, a_new + (iy_end - 1) * nx, nx * sizeof(real));
+  block_proxy->invoke(top_pe, 1, a_new + iy_start * nx, nx * sizeof(real), iter);
+  block_proxy->invoke(bottom_pe, 1, a_new + (iy_end - 1) * nx, nx * sizeof(real), iter);
 }
 
 __device__ void Block::recv_halo(void* arg) {
@@ -142,10 +145,15 @@ __device__ void Block::recv_halo(void* arg) {
     end = false;
 
     if (++recv_count == 2) {
+      // Received halos from both neighbors
       recv_count = 0;
       done = true;
 
-      if (++iter == iter_max) {
+      // Set reference number for next iteration
+      iter++;
+      block_proxy->set_refnum(mype, iter);
+
+      if (iter == iter_max) {
         end = true;
         if (mype == 0) {
           printf("Completed %d iterations\n", iter_max);
