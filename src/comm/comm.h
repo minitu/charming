@@ -26,7 +26,6 @@ struct alignas(ALIGN_SIZE) comm {
   int child_count;
 
   int local_start;
-  int remote_start;
 
   __device__ void init();
   __device__ void process_local();

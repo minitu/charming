@@ -20,14 +20,10 @@
 #define MBUF_PE_SIZE 8388608 // 8MB per PE
 #define MBUF_CE_SIZE 134217728 // 128MB per CE
 
-/*
-// Maximum number of messages that are allowed to be in flight per pair of PEs
-#define REMOTE_MSG_COUNT_MAX 4
-// Maximum number of messages that can be stored in the local message queue
-#define LOCAL_MSG_COUNT_MAX 128
-*/
-#define LOCAL_MSG_MAX 4
+#define LOCAL_MSG_MAX 4 // Should always be a multiple of 4 for vectorized loads
 #define REMOTE_MSG_MAX 4
+#define USE_VECTORIZED_LOAD
+#define FIND_MSG_BLOCK
 
 using namespace charm;
 
@@ -147,6 +143,7 @@ __device__ void charm::comm::init() {
   sent_term_flag = false;
   begin_term_flag = false;
   do_term_flag = false;
+  local_start = 0;
 
   if (!s_mem[s_idx::is_pe]) {
     // Store local ranks and count of child PEs for this CE
@@ -164,9 +161,6 @@ __device__ void charm::comm::init() {
       }
     }
   }
-
-  local_start = 0;
-  remote_start = 0;
 }
 
 __device__ __forceinline__ int find_signal_single(volatile int* status,
@@ -222,8 +216,8 @@ __device__ __forceinline__ int find_signal_block(volatile int* status,
 }
 
 __device__ __forceinline__ atomic64_t find_msg_single(volatile atomic64_t* comps,
-    int& start, int& idx) {
-  idx = INT_MAX;
+    int& start, int& ret_idx) {
+  ret_idx = INT_MAX;
   atomic64_t comp = 0;
 
   // Look for a valid message (traverse once)
@@ -234,7 +228,7 @@ __device__ __forceinline__ atomic64_t find_msg_single(volatile atomic64_t* comps
     __threadfence();
 
     if (comp) {
-      idx = index;
+      ret_idx = index;
       start = (start + 1) % max_count;
       break;
     }
@@ -243,8 +237,8 @@ __device__ __forceinline__ atomic64_t find_msg_single(volatile atomic64_t* comps
   return comp;
 }
 
-/*
-__device__ __forceinline__ atomic64_t find_msg_block(volatile atomic64_t* comps, int& ret_idx) {
+__device__ __forceinline__ atomic64_t find_msg_block(volatile atomic64_t* comps,
+    int& start, int& ret_idx) {
   __shared__ volatile int idx;
   __shared__ atomic64_t comp;
   if (threadIdx.x == 0) {
@@ -253,30 +247,50 @@ __device__ __forceinline__ atomic64_t find_msg_block(volatile atomic64_t* comps,
   }
   __syncthreads();
 
+  int max_count = LOCAL_MSG_MAX * c_n_sms;
+#ifdef USE_VECTORIZED_LOAD
+  for (int i = threadIdx.x; i < max_count / 4; i += blockDim.x) {
+    int index = (start + i) % (max_count / 4);
+    ulonglong4 comp4 = ((ulonglong4*)comps)[index];
+    __threadfence();
+
+    int valid = -1;
+    if (comp4.w) valid = 4*index+3;
+    if (comp4.z) valid = 4*index+2;
+    if (comp4.y) valid = 4*index+1;
+    if (comp4.x) valid = 4*index;
+
+    if (valid >= 0) {
+      atomicMin_block((int*)&idx, valid);
+    }
+  }
+#else
   // Look for a valid message (traverse once)
-  for (int i = threadIdx.x; i < LOCAL_MSG_MAX * c_n_sms; i += blockDim.x) {
-    if (comps[i] != 0) {
-      atomicMin_block((int*)&idx, i);
+  for (int i = threadIdx.x; i < max_count; i += blockDim.x) {
+    int index = (start + i) % max_count;
+    if (comps[index] != 0) {
+      atomicMin_block((int*)&idx, index);
     }
     __threadfence();
   }
+#endif
   __syncthreads();
   ret_idx = idx;
 
   // If a message is found
   if (idx != INT_MAX && threadIdx.x == 0) {
     comp = (atomic64_t)comps[idx];
+#ifdef USE_VECTORIZED_LOAD
+    start = (start + 1) % (max_count / 4);
+#else
+    start = (start + 1) % max_count;
+#endif
     __threadfence();
-
-    // Reset message address to zero
-    atomic64_t ret = atomicCAS((atomic64_t*)&comps[idx], comp, 0);
-    assert(ret == comp);
   }
   __syncthreads();
 
   return comp;
 }
-*/
 
 __device__ void charm::comm::process_local() {
   int dst_local_rank = blockIdx.x;
@@ -288,6 +302,10 @@ __device__ void charm::comm::process_local() {
   // Look for valid message addresses
   volatile atomic64_t* recv_comp = recv_comp_local + LOCAL_MSG_MAX * c_n_sms * dst_local_rank;
   int msg_idx;
+#ifdef FIND_MSG_BLOCK
+  atomic64_t data = find_msg_block(recv_comp, local_start, msg_idx);
+  composite_t comp(data);
+#else
   if (threadIdx.x == 0) {
     atomic64_t data = find_msg_single(recv_comp, local_start, msg_idx);
     s_mem[s_idx::dst] = (uint64_t)data;
@@ -296,6 +314,7 @@ __device__ void charm::comm::process_local() {
   __syncthreads();
   composite_t comp(s_mem[s_idx::dst]);
   msg_idx = (int)s_mem[s_idx::src];
+#endif
 
   if (comp.data) {
     int src_local_rank = msg_idx / LOCAL_MSG_MAX;
