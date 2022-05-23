@@ -70,6 +70,7 @@ int main(int argc, char* argv[]) {
   cudaGetDeviceProperties(&prop, 0);
   //int max_threads_tb = prop.maxThreadsPerBlock;
   int h_n_sms = prop.multiProcessorCount;
+  //int h_n_sms = 4;
   int h_n_clusters_dev = 1;
   int h_cluster_size = h_n_sms / h_n_clusters_dev;
   int h_n_ces_cluster = 1;
@@ -175,7 +176,7 @@ int main(int argc, char* argv[]) {
   constexpr size_t new_stack_size = 16384;
   cudaDeviceSetLimit(cudaLimitStackSize, new_stack_size);
   cudaDeviceGetLimit(&stack_size, cudaLimitStackSize);
-  constexpr size_t new_heap_size = 1073741824;
+  constexpr size_t new_heap_size = 4294967296;
   cudaDeviceSetLimit(cudaLimitMallocHeapSize, new_heap_size);
   cudaDeviceGetLimit(&heap_size, cudaLimitMallocHeapSize);
   cudaDeviceSetCacheConfig(cudaFuncCachePreferL1);
@@ -248,6 +249,8 @@ __device__ int charm::my_pe() { return s_mem[s_idx::my_pe]; }
 __device__ int charm::n_pes() { return c_n_pes; }
 __device__ int charm::n_pes_node() { return c_n_pes_node; }
 __device__ int charm::n_nodes() { return c_n_nodes; }
+
+__device__ void charm::barrier() { scheduler_barrier(); }
 
 __device__ int charm::device_atoi(const char* str, int strlen) {
   int tmp = 0;

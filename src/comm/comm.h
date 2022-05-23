@@ -21,8 +21,12 @@ struct alignas(ALIGN_SIZE) comm {
   bool sent_term_flag;
   bool begin_term_flag;
   bool do_term_flag;
+
   int* child_local_ranks;
   int child_count;
+
+  int local_start;
+  int remote_start;
 
   __device__ void init();
   __device__ void process_local();

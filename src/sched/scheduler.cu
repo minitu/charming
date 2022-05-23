@@ -19,11 +19,11 @@ extern __device__ __managed__ chare_proxy_table* proxy_tables;
 // GPU shared memory
 extern __shared__ uint64_t s_mem[];
 
-__device__ msgtype charm::process_msg_pe(void* addr, size_t offset,
+__device__ bool charm::process_msg_pe(void* addr, size_t offset, msgtype& type,
     bool& begin_term_flag, bool& do_term_flag) {
   int my_pe = s_mem[s_idx::my_pe];
   envelope* env = (envelope*)addr;
-  msgtype type = env->type;
+  type = env->type;
   if (threadIdx.x == 0) {
     PDEBUG("PE %d processing msg type %d size %llu\n", my_pe, type, env->size);
   }
@@ -34,27 +34,27 @@ __device__ msgtype charm::process_msg_pe(void* addr, size_t offset,
     // Regular message (including user message)
     regular_msg* msg = (regular_msg*)((char*)env + sizeof(envelope));
     if (threadIdx.x == 0) {
-      PDEBUG("PE %d regular msg chare ID %d chare idx %d EP ID %d\n", my_pe,
-          msg->chare_id, msg->chare_idx, msg->ep_id);
+      PDEBUG("PE %d regular msg chare ID %d chare idx %d EP ID %d refnum %d\n",
+          my_pe, msg->chare_id, msg->chare_idx, msg->ep_id, msg->refnum);
     }
 
     chare_proxy_base*& chare_proxy = my_proxy_table.proxies[msg->chare_id];
     void* payload = (char*)msg + sizeof(regular_msg);
 
-    chare_proxy->call(msg->chare_idx, msg->ep_id, payload);
+    return chare_proxy->call(msg->chare_idx, msg->ep_id, payload, msg->refnum);
 
   } else if (type == msgtype::forward) {
     // Forwarded from CE
     forward_msg* msg = (forward_msg*)((char*)env + sizeof(envelope));
     if (threadIdx.x == 0) {
-      PDEBUG("PE %d forward msg chare ID %d chare idx %d EP ID %d\n", my_pe,
-          msg->chare_id, msg->chare_idx, msg->ep_id);
+      PDEBUG("PE %d forward msg chare ID %d chare idx %d EP ID %d refnum %d\n",
+          my_pe, msg->chare_id, msg->chare_idx, msg->ep_id, msg->refnum);
     }
 
     chare_proxy_base*& chare_proxy = my_proxy_table.proxies[msg->chare_id];
     void* payload = (char*)msg + sizeof(forward_msg);
 
-    chare_proxy->call(msg->chare_idx, msg->ep_id, payload);
+    return chare_proxy->call(msg->chare_idx, msg->ep_id, payload, msg->refnum);
 
   } else if (type == msgtype::do_terminate) {
     // Received message to terminate
@@ -71,14 +71,14 @@ __device__ msgtype charm::process_msg_pe(void* addr, size_t offset,
     assert(false);
   }
 
-  return type;
+  return true;
 }
 
-__device__ msgtype charm::process_msg_ce(void* addr, size_t offset,
+__device__ bool charm::process_msg_ce(void* addr, size_t offset, msgtype& type,
     bool& sent_term_flag, bool& begin_term_flag, bool& do_term_flag) {
   int my_ce = s_mem[s_idx::my_ce];
   envelope* env = (envelope*)addr;
-  msgtype type = env->type;
+  type = env->type;
   if (threadIdx.x == 0) {
     PDEBUG("CE %d processing msg type %d size %llu\n", my_ce, type, env->size);
   }
@@ -97,7 +97,7 @@ __device__ msgtype charm::process_msg_ce(void* addr, size_t offset,
     if (msg->type == msgtype::begin_terminate) {
       // If a begin termination message has already been sent from this CE,
       // don't send it again
-      if (sent_term_flag) return type;
+      if (sent_term_flag) return true;
       if (threadIdx.x == 0) {
         sent_term_flag = true;
       }
@@ -125,7 +125,7 @@ __device__ msgtype charm::process_msg_ce(void* addr, size_t offset,
     assert(my_ce == 0);
 
     // Check if begin_terminate message was already received
-    if (begin_term_flag) return type;
+    if (begin_term_flag) return true;
 
     // Send out do_terminate messages to all CEs
     if (threadIdx.x == 0) {
@@ -158,7 +158,7 @@ __device__ msgtype charm::process_msg_ce(void* addr, size_t offset,
     assert(false);
   }
 
-  return type;
+  return true;
 }
 
 
@@ -181,9 +181,6 @@ __device__ __forceinline__ void loop_ce(comm* c) {
 }
 
 __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
-  // For grid synchronization
-  cg::grid_group grid = cg::this_grid();
-
   // Communication module resides in shared memory (one per TB)
   comm* c = (comm*)(s_mem + SMEM_CNT_MAX);
 
@@ -207,30 +204,15 @@ __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
 
     // Initialize comm module
     c->init();
-
-    // Create user chares and register entry methods
-    create_chares(argc, argv, argvs);
   }
   __syncthreads();
 
-  // Global synchronization
-  int gid = blockDim.x * blockIdx.x + threadIdx.x;
-  if (gid == 0) {
-    nvshmem_barrier_all();
-  }
-  grid.sync();
+  scheduler_barrier();
 
-  int my_pe = s_mem[s_idx::my_pe];
-  if (my_pe == 0) {
-    // Execute user's main function
-    main(argc, argv, argvs);
-  }
+  // Execute user's main function on all elements
+  main(argc, argv, argvs, s_mem[s_idx::my_pe]);
 
-  // Global synchronization
-  if (gid == 0) {
-    nvshmem_barrier_all();
-  }
-  grid.sync();
+  scheduler_barrier();
 
   // Loop until termination
   if (s_mem[s_idx::is_pe]) {
@@ -243,14 +225,21 @@ __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
     } while (!c->do_term_flag);
   }
 
-  // Global synchronization
-  if (gid == 0) {
-    nvshmem_barrier_all();
-  }
-  grid.sync();
+  scheduler_barrier();
 
   if (threadIdx.x == 0) {
     PDEBUG("%s %d terminating...\n", s_mem[s_idx::is_pe] ? "PE" : "CE",
         s_mem[s_idx::is_pe] ? (int)s_mem[s_idx::my_pe] : (int)s_mem[s_idx::my_ce]);
   }
+}
+
+__device__ void charm::scheduler_barrier() {
+  // For grid synchronization
+  cg::grid_group grid = cg::this_grid();
+
+  int gid = blockDim.x * blockIdx.x + threadIdx.x;
+  if (gid == 0) {
+    nvshmem_barrier_all();
+  }
+  grid.sync();
 }

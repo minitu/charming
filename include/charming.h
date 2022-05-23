@@ -3,12 +3,12 @@
 
 #include "chare.h"
 #include "message.h"
+#include "kernel.h"
 
 namespace charm {
 
-// User functions required by the runtime
-__device__ void create_chares(int argc, char** argv, size_t* argvs);
-__device__ void main(int argc, char** argv, size_t* argvs);
+// Main function executed on all PEs
+__device__ void main(int argc, char** argv, size_t* argvs, int pe);
 
 // Runtime functions that can be called by the user
 __device__ void end();
@@ -19,6 +19,9 @@ __device__ int n_pes();
 __device__ int my_pe_node();
 __device__ int n_pes_node();
 __device__ int n_nodes();
+
+// Element-level barrier (requires all PEs and CEs to participate)
+__device__ void barrier();
 
 __device__ int device_atoi(const char* str, int strlen);
 

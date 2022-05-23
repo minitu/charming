@@ -164,6 +164,9 @@ __device__ void charm::comm::init() {
       }
     }
   }
+
+  local_start = 0;
+  remote_start = 0;
 }
 
 __device__ __forceinline__ int find_signal_single(volatile int* status,
@@ -218,20 +221,21 @@ __device__ __forceinline__ int find_signal_block(volatile int* status,
   return idx;
 }
 
-__device__ __forceinline__ atomic64_t find_msg_single(volatile atomic64_t* comps, int& idx) {
+__device__ __forceinline__ atomic64_t find_msg_single(volatile atomic64_t* comps,
+    int& start, int& idx) {
   idx = INT_MAX;
   atomic64_t comp = 0;
 
   // Look for a valid message (traverse once)
-  for (int i = 0; i < LOCAL_MSG_MAX * c_n_sms; i++) {
-    comp = comps[i];
+  int max_count = LOCAL_MSG_MAX * c_n_sms;
+  for (int i = 0; i < max_count; i++) {
+    int index = (start + i) % max_count;
+    comp = comps[index];
     __threadfence();
 
-    // If a message is found, reset message address to zero
     if (comp) {
-      idx = i;
-      atomic64_t ret = atomicCAS((atomic64_t*)&comps[idx], comp, 0);
-      assert(ret == comp);
+      idx = index;
+      start = (start + 1) % max_count;
       break;
     }
   }
@@ -239,6 +243,7 @@ __device__ __forceinline__ atomic64_t find_msg_single(volatile atomic64_t* comps
   return comp;
 }
 
+/*
 __device__ __forceinline__ atomic64_t find_msg_block(volatile atomic64_t* comps, int& ret_idx) {
   __shared__ volatile int idx;
   __shared__ atomic64_t comp;
@@ -271,6 +276,7 @@ __device__ __forceinline__ atomic64_t find_msg_block(volatile atomic64_t* comps,
 
   return comp;
 }
+*/
 
 __device__ void charm::comm::process_local() {
   int dst_local_rank = blockIdx.x;
@@ -282,7 +288,14 @@ __device__ void charm::comm::process_local() {
   // Look for valid message addresses
   volatile atomic64_t* recv_comp = recv_comp_local + LOCAL_MSG_MAX * c_n_sms * dst_local_rank;
   int msg_idx;
-  composite_t comp((uint64_t)find_msg_block(recv_comp, msg_idx));
+  if (threadIdx.x == 0) {
+    atomic64_t data = find_msg_single(recv_comp, local_start, msg_idx);
+    s_mem[s_idx::dst] = (uint64_t)data;
+    s_mem[s_idx::src] = (uint64_t)msg_idx;
+  }
+  __syncthreads();
+  composite_t comp(s_mem[s_idx::dst]);
+  msg_idx = (int)s_mem[s_idx::src];
 
   if (comp.data) {
     int src_local_rank = msg_idx / LOCAL_MSG_MAX;
@@ -298,27 +311,33 @@ __device__ void charm::comm::process_local() {
     __syncthreads();
 
     // Process message in parallel
-    msgtype type = is_pe ?
-      process_msg_pe(env, comp.offset(), begin_term_flag, do_term_flag)
-      : process_msg_ce(env, comp.offset(), sent_term_flag, begin_term_flag,
+    msgtype type;
+    bool success = is_pe ?
+      process_msg_pe(env, comp.offset(), type, begin_term_flag, do_term_flag)
+      : process_msg_ce(env, comp.offset(), type, sent_term_flag, begin_term_flag,
           do_term_flag);
 
-    // Signal sender for cleanup
-    if (threadIdx.x == 0 && type != msgtype::user) {
-      PDEBUG("%s %d process_local signal cleanup (env %p, msgtype %d, size %llu) "
-          "to local rank %d at index %d\n",
-          is_pe ? "PE" : "CE", dst_elem, env, env->type, env->size,
-          src_local_rank, clup_idx);
+    if (success && threadIdx.x == 0) {
+      // Clean up received composite
+      atomicExch((atomic64_t*)&recv_comp[msg_idx], 0);
 
-      volatile int* src_send_status = send_status_local
-        + LOCAL_MSG_MAX * c_n_sms * src_local_rank + LOCAL_MSG_MAX * dst_local_rank;
+      if (type != msgtype::user) {
+        // Signal sender for cleanup
+        PDEBUG("%s %d process_local signal cleanup (env %p, msgtype %d, size %llu) "
+            "to local rank %d at index %d\n",
+            is_pe ? "PE" : "CE", dst_elem, env, env->type, env->size,
+            src_local_rank, clup_idx);
+
+        volatile int* src_send_status = send_status_local
+          + LOCAL_MSG_MAX * c_n_sms * src_local_rank + LOCAL_MSG_MAX * dst_local_rank;
 #ifndef NO_CLEANUP
-      int signal = SIGNAL_CLUP;
+        int signal = SIGNAL_CLUP;
 #else
-      int signal = SIGNAL_FREE;
+        int signal = SIGNAL_FREE;
 #endif
-      int ret = atomicCAS((int*)&src_send_status[clup_idx], SIGNAL_USED, signal);
-      assert(ret == SIGNAL_USED);
+        int ret = atomicCAS((int*)&src_send_status[clup_idx], SIGNAL_USED, signal);
+        assert(ret == SIGNAL_USED);
+      }
     }
     __syncthreads();
   }
@@ -411,10 +430,11 @@ __device__ void charm::comm::process_remote() {
 #endif
 
       // Process message in parallel
-      msgtype type = process_msg_ce(dst_addr, dst_offset, sent_term_flag,
+      msgtype type;
+      bool success = process_msg_ce(dst_addr, dst_offset, type, sent_term_flag,
           begin_term_flag, do_term_flag);
 
-      if (threadIdx.x == 0) {
+      if (success && threadIdx.x == 0) {
         // Clear message request
         // FIXME: Need fence after?
         nvshmemx_signal_op(recv_comp + found_idx, SIGNAL_FREE, NVSHMEM_SIGNAL_SET,
@@ -653,7 +673,7 @@ __device__ void charm::send_remote_msg(envelope* env, size_t offset, int dst_ce)
 }
 
 __device__ void charm::send_reg_msg(int chare_id, int chare_idx, int ep_id,
-    void* buf, size_t payload_size, int dst_pe) {
+    void* buf, size_t payload_size, int dst_pe, int refnum) {
   if (threadIdx.x == 0) {
     int src_dev = get_dev_from_pe(s_mem[s_idx::my_pe]);
     int dst_dev = get_dev_from_pe(dst_pe);
@@ -664,7 +684,7 @@ __device__ void charm::send_reg_msg(int chare_id, int chare_idx, int ep_id,
           (size_t&)s_mem[s_idx::offset]);
 
       regular_msg* msg = new ((char*)env + sizeof(envelope)) regular_msg(
-          chare_id, chare_idx, ep_id);
+          chare_id, chare_idx, ep_id, refnum);
 
       if (payload_size > 0) {
         s_mem[s_idx::dst] = (uint64_t)((char*)msg + sizeof(regular_msg));
@@ -678,7 +698,8 @@ __device__ void charm::send_reg_msg(int chare_id, int chare_idx, int ep_id,
       env = create_envelope(msgtype::request, 0, (size_t&)s_mem[s_idx::offset]);
 
       request_msg* msg = new ((char*)env + sizeof(envelope)) request_msg(
-          chare_id, chare_idx, ep_id, msgtype::regular, buf, payload_size, dst_pe);
+          chare_id, chare_idx, ep_id, msgtype::regular, buf, payload_size,
+          dst_pe, refnum);
       s_mem[s_idx::size] = 0;
       int my_ce = get_ce_from_pe((int)s_mem[s_idx::my_pe]);
       s_mem[s_idx::local_rank] = (uint64_t)get_local_rank_from_ce(my_ce);
@@ -713,7 +734,7 @@ __device__ void charm::send_delegate_msg(request_msg* req) {
           (size_t&)s_mem[s_idx::offset]);
 
       forward_msg* msg = new ((char*)env + sizeof(envelope)) forward_msg(
-          req->chare_id, req->chare_idx, req->ep_id, req->dst_pe);
+          req->chare_id, req->chare_idx, req->ep_id, req->dst_pe, req->refnum);
 
       if (req->payload_size > 0) {
         s_mem[s_idx::dst] = (uint64_t)((char*)msg + sizeof(forward_msg));
@@ -757,7 +778,7 @@ __device__ __forceinline__ void send_user_msg_common(int chare_id, int chare_idx
   envelope* env = msg.env;
   if (threadIdx.x == 0) {
     // Set regular message fields using placement new
-    new ((char*)env + sizeof(envelope)) regular_msg(chare_id, chare_idx, ep_id);
+    new ((char*)env + sizeof(envelope)) regular_msg(chare_id, chare_idx, ep_id, -1);
   }
   __syncthreads();
 
@@ -802,7 +823,7 @@ __device__ void charm::send_begin_term_msg() {
           (size_t&)s_mem[s_idx::offset]);
 
       request_msg* msg = new ((char*)env + sizeof(envelope)) request_msg(
-          -1, -1, -1, msgtype::begin_terminate, nullptr, 0, -1);
+          -1, -1, -1, msgtype::begin_terminate, nullptr, 0, -1, -1);
       int src_ce = get_ce_from_pe(src_pe);
       s_mem[s_idx::local_rank] = (uint64_t)get_local_rank_from_ce(src_ce);
     }

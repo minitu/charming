@@ -45,7 +45,7 @@ struct chare_proxy_base {
   int id;
 
   __device__ chare_proxy_base() {}
-  __device__ virtual void call(int idx, int ep, void* arg) = 0;
+  __device__ virtual bool call(int idx, int ep, void* arg, int ref) = 0;
 };
 
 struct chare_proxy_table {
@@ -65,6 +65,7 @@ namespace charm {
 template <typename C>
 struct chare_proxy : chare_proxy_base {
   C** objects; // Chare objects on this PE (local chares)
+  int *refnum;
 
   int n_local; // Number of local chares
   int n_total; // Total number of chares
@@ -78,8 +79,8 @@ struct chare_proxy : chare_proxy_base {
   int em_count; // Number of registered entry methods
 
   __device__ chare_proxy()
-    : objects(nullptr), n_local(0), n_total(0), start_idx(-1), end_idx(-1),
-      loc_map(nullptr), entry_methods(nullptr), em_count(0) {
+    : objects(nullptr), refnum(nullptr), n_local(0), n_total(0), start_idx(-1),
+    end_idx(-1), loc_map(nullptr), entry_methods(nullptr), em_count(0) {
     // Store this proxy for the runtime
     chare_proxy_table& my_proxy_table = proxy_tables[blockIdx.x];
     id = my_proxy_table.count++;
@@ -126,10 +127,12 @@ struct chare_proxy : chare_proxy_base {
         end_idx = end;
 
         objects = (n_local > 0) ? new C*[n_local] : nullptr;
+        refnum = (n_local > 0) ? new int[n_local] : nullptr;
         for (int idx = 0; idx < n_local; idx++) {
           objects[idx] = new C;
           objects[idx]->i = start_idx + idx;
           objects[idx]->n = n_total;
+          refnum[idx] = -1;
         }
       }
 
@@ -145,30 +148,41 @@ struct chare_proxy : chare_proxy_base {
 
   inline __device__ void create(int n_chares) { create(n_chares, nullptr); }
 
-  __device__ virtual void call(int idx, int ep, void* arg) {
+  __device__ virtual bool call(int idx, int ep, void* arg, int ref) {
     assert(idx >= start_idx && idx <= end_idx);
-    (*(entry_methods[ep]))(*(objects[idx - start_idx]), arg);
+    int local_idx = idx - start_idx;
+
+    // Don't execute the entry method if reference number doesn't match
+    if (ref != refnum[local_idx]) {
+      return false;
+    }
+
+    // Execute entry method
+    (*(entry_methods[ep]))(*(objects[local_idx]), arg);
+
+    return true;
   }
 
   inline __device__ void invoke(int idx, int ep) { invoke(idx, ep, nullptr, 0); }
   inline __device__ void invoke(int idx, int ep, void* buf, size_t size) {
-    send_reg_msg(id, idx, ep, buf, size, loc_map[idx]);
+    send_reg_msg(id, idx, ep, buf, size, loc_map[idx], -1);
   }
-  inline __device__ void invoke(int idx, int ep, const message& msg) {
-    send_user_msg(id, idx, ep, msg);
+  inline __device__ void invoke(int idx, int ep, void* buf, size_t size, int refnum) {
+    send_reg_msg(id, idx, ep, buf, size, loc_map[idx], refnum);
   }
-  inline __device__ void invoke(int idx, int ep, const message& msg, size_t size) {
-    send_user_msg(id, idx, ep, msg, size);
-  }
+
   inline __device__ void invoke_all(int ep) { invoke_all(ep, nullptr, 0); }
   inline __device__ void invoke_all(int ep, void* buf, size_t size) {
     for (int i = 0; i < n_total; i++) {
       invoke(i, ep, buf, size);
     }
   }
-  inline __device__ void invoke_local(int idx, int ep, void* buf, size_t size) {
-    chare_proxy_base*& chare_proxy = proxy_tables[blockIdx.x].proxies[id];
-    chare_proxy->call(idx, ep, buf);
+
+  inline __device__ void invoke(int idx, int ep, const message& msg) {
+    send_user_msg(id, idx, ep, msg);
+  }
+  inline __device__ void invoke(int idx, int ep, const message& msg, size_t size) {
+    send_user_msg(id, idx, ep, msg, size);
   }
 
   inline __device__ void alloc_msg(message& msg, int idx, size_t size) {
