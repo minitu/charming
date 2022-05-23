@@ -3,51 +3,57 @@
 
 __shared__ charm::chare_proxy<Comm>* comm_proxy;
 
-__device__ void charm::create_chares(int argc, char** argv, size_t* argvs) {
-  // Create chare proxy and register entry methods
-  comm_proxy = new charm::chare_proxy<Comm>();
-  comm_proxy->add_entry_method<&entry_init>();
-  comm_proxy->add_entry_method<&entry_init_done>();
-  comm_proxy->add_entry_method<&entry_recv>();
-
-  // Custom block map
-  int n_pes = charm::n_pes();
-  int* block_map = new int[n_pes];
-  for (int pe = 0; pe < n_pes; pe++) {
-    block_map[pe] = 0;
-  }
-  block_map[0] = 1;
-  block_map[n_pes/2] = 1;
-
-  // Create chares
-  //comm_proxy->create(2);
-  comm_proxy->create(2, block_map);
-}
-
-__device__ void charm::main(int argc, char** argv, size_t* argvs) {
-  constexpr int n_params = 4;
-  __shared__ size_t params[n_params];
-
+__device__ void charm::main(int argc, char** argv, size_t* argvs, int pe) {
+  // Execute on all elements
   if (threadIdx.x == 0) {
-    // Default parameters
-    params[0] = 1;
-    params[1] = 1048576;
-    params[2] = 1000;
-    params[3] = 10;
+    // Create chare proxy and register entry methods
+    comm_proxy = new charm::chare_proxy<Comm>();
+    comm_proxy->add_entry_method<&entry_init>();
+    comm_proxy->add_entry_method<&entry_init_done>();
+    comm_proxy->add_entry_method<&entry_recv>();
 
-    // Process command line arguments
-    if (argc >= 2) params[0] = charm::device_atoi(argv[1], argvs[1]);
-    if (argc >= 3) params[1] = charm::device_atoi(argv[2], argvs[2]);
-    if (argc >= 4) params[2] = charm::device_atoi(argv[3], argvs[3]);
-    if (argc >= 5) params[3] = charm::device_atoi(argv[4], argvs[4]);
+    // Custom block map to pick 2 PEs on the opposite sides
+    int n_pes = charm::n_pes();
+    int* block_map = new int[n_pes];
+    for (int i = 0; i < n_pes; i++) {
+      block_map[i] = 0;
+    }
+    block_map[0] = 1;
+    block_map[n_pes/2] = 1;
 
-    printf("Pingpong\n");
-    printf("Size: %llu - %llu\n", params[0], params[1]);
-    printf("Iterations: %d (Warmup: %d)\n", (int)params[2], (int)params[3]);
+    // Create chares
+    comm_proxy->create(2, block_map);
   }
   __syncthreads();
 
-  comm_proxy->invoke_all(0, params, sizeof(size_t) * n_params);
+  barrier();
+
+  // Execute only on PE 0
+  if (pe == 0) {
+    constexpr int n_params = 4;
+    __shared__ size_t params[n_params];
+
+    if (threadIdx.x == 0) {
+      // Default parameters
+      params[0] = 1;
+      params[1] = 1048576;
+      params[2] = 1000;
+      params[3] = 10;
+
+      // Process command line arguments
+      if (argc >= 2) params[0] = charm::device_atoi(argv[1], argvs[1]);
+      if (argc >= 3) params[1] = charm::device_atoi(argv[2], argvs[2]);
+      if (argc >= 4) params[2] = charm::device_atoi(argv[3], argvs[3]);
+      if (argc >= 5) params[3] = charm::device_atoi(argv[4], argvs[4]);
+
+      printf("Pingpong\n");
+      printf("Size: %llu - %llu\n", params[0], params[1]);
+      printf("Iterations: %d (Warmup: %d)\n", (int)params[2], (int)params[3]);
+    }
+    __syncthreads();
+
+    comm_proxy->invoke_all(0, params, sizeof(size_t) * n_params);
+  }
 }
 
 __device__ void Comm::init(void* arg) {
