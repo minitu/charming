@@ -185,6 +185,12 @@ struct chare_proxy : chare_proxy_base {
     send_user_msg(id, idx, ep, msg, size);
   }
 
+  inline __device__ void set_refnum(int idx, int val) {
+    assert(idx >= start_idx && idx <= end_idx);
+    int local_idx = idx - start_idx;
+    refnum[local_idx] = val;
+  }
+
   inline __device__ void alloc_msg(message& msg, int idx, size_t size) {
     msg.dst_pe = loc_map[idx];
     msg.env = create_envelope(msgtype::user, size, msg.offset);

@@ -196,9 +196,9 @@ __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
     s_mem[s_idx::is_pe] = (uint64_t)is_pe;
     if (is_pe) {
       s_mem[s_idx::my_pe] = my_pe;
-      s_mem[s_idx::my_ce] = UINT64_MAX;
+      s_mem[s_idx::my_ce] = (uint64_t)-1;
     } else {
-      s_mem[s_idx::my_pe] = UINT64_MAX;
+      s_mem[s_idx::my_pe] = (uint64_t)-1;
       s_mem[s_idx::my_ce] = my_ce;
     }
 
@@ -210,7 +210,7 @@ __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
   scheduler_barrier();
 
   // Execute user's main function on all elements
-  main(argc, argv, argvs, s_mem[s_idx::my_pe]);
+  main(argc, argv, argvs, (int)s_mem[s_idx::my_pe]);
 
   scheduler_barrier();
 
