@@ -336,11 +336,34 @@ __device__ void charm::comm::process_local() {
       : process_msg_ce(env, comp.offset(), type, sent_term_flag, begin_term_flag,
           do_term_flag);
 
-    if (success && threadIdx.x == 0) {
+    if (threadIdx.x == 0) {
       // Clean up received composite
       atomicExch((atomic64_t*)&recv_comp[msg_idx], 0);
 
-      if (type != msgtype::user) {
+      if (!success) {
+        // Reference number matching failed
+        // Store information about the message in a mismatch_t
+        regular_msg* msg = (regular_msg*)((char*)env + sizeof(envelope));
+        chare_proxy_base*& chare_proxy = proxy_tables[blockIdx.x].proxies[msg->chare_id];
+        mismatch_t* mismatches = chare_proxy->mismatches;
+        int mismatch_idx = -1;
+        // Look for a free mismatch_t
+        for (int i = 0; i < MISMATCH_MAX; i++) {
+          if (mismatches[i].msg_idx == -1) {
+            mismatch_idx = i;
+            break;
+          }
+        }
+        if (mismatch_idx == -1) {
+          PERROR("Element %d ran out of mismatches\n", blockIdx.x);
+          assert(false);
+        }
+        mismatch_t& mismatch = mismatches[mismatch_idx];
+        mismatch.msg_idx = msg_idx;
+        mismatch.comp = comp.data;
+        mismatch.chare_idx = msg->chare_idx;
+        mismatch.refnum = msg->refnum;
+      } else if (type != msgtype::user) {
         // Signal sender for cleanup
         PDEBUG("%s %d process_local signal cleanup (env %p, msgtype %d, size %llu) "
             "to local rank %d at index %d\n",
@@ -894,4 +917,25 @@ __device__ void charm::send_do_term_msg_pe(int dst_local_rank) {
   // Send message to child PE
   send_local_msg((envelope*)s_mem[s_idx::env], (size_t)s_mem[s_idx::offset],
       dst_local_rank);
+}
+
+// Single-threaded
+__device__ void charm::revive_mismatches(int chare_id, int chare_idx, int refnum) {
+  // Look for mismatches with the given chare index and refnum
+  chare_proxy_base*& chare_proxy = proxy_tables[blockIdx.x].proxies[chare_id];
+  mismatch_t* mismatches = chare_proxy->mismatches;
+  for (int i = 0; i < MISMATCH_MAX; i++) {
+    mismatch_t& mismatch = mismatches[i];
+    if (mismatch.msg_idx != -1 && mismatch.chare_idx == chare_idx
+        && mismatch.refnum == refnum) {
+      int msg_idx_global = LOCAL_MSG_MAX * c_n_sms * blockIdx.x + mismatch.msg_idx;
+      volatile atomic64_t* comp_addr = recv_comp_local + msg_idx_global;
+      // Revive composite of mismatched message so that it can be processed
+      // in the next scheduler loop
+      atomicExch((atomic64_t*)comp_addr, (atomic64_t)mismatch.comp);
+
+      // Clear mismatch
+      mismatch.msg_idx = -1;
+    }
+  }
 }

@@ -108,6 +108,7 @@ __device__ void send_user_msg(int chare_id, int chare_idx, int ep_id,
 __device__ void send_begin_term_msg();
 __device__ void send_do_term_msg_ce(int dst_ce);
 __device__ void send_do_term_msg_pe(int dst_local_rank);
+__device__ void revive_mismatches(int chare_id, int chare_idx, int refnum);
 
 }
 

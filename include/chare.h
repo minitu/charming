@@ -7,7 +7,8 @@
 #include "kernel.h"
 
 #define CHARE_TYPE_CNT_MAX 1024 // Maximum number of chare types
-#define EM_CNT_MAX 128 // Maximum number of entry methods per chare
+#define EM_CNT_MAX 128 // Maximum number of entry methods per chare type
+#define MISMATCH_MAX 128 // Maximum number of mismatched messages per chare type
 
 // GPU constant memory
 extern __constant__ int c_n_pes;
@@ -41,8 +42,18 @@ struct entry_method : entry_method_base<C> {
   __device__ virtual void operator()(C& chare, void* arg) { Func(chare, arg); }
 };
 
+struct mismatch_t {
+  int msg_idx;
+  uint64_t comp;
+  int chare_idx;
+  int refnum;
+
+  __device__ mismatch_t() : msg_idx(-1) {}
+};
+
 struct chare_proxy_base {
   int id;
+  mismatch_t* mismatches;
 
   __device__ chare_proxy_base() {}
   __device__ virtual bool call(int idx, int ep, void* arg, int ref) = 0;
@@ -128,6 +139,7 @@ struct chare_proxy : chare_proxy_base {
 
         objects = (n_local > 0) ? new C*[n_local] : nullptr;
         refnum = (n_local > 0) ? new int[n_local] : nullptr;
+        mismatches = (n_local > 0) ? new mismatch_t[MISMATCH_MAX] : nullptr;
         for (int idx = 0; idx < n_local; idx++) {
           objects[idx] = new C;
           objects[idx]->i = start_idx + idx;
@@ -185,10 +197,13 @@ struct chare_proxy : chare_proxy_base {
     send_user_msg(id, idx, ep, msg, size);
   }
 
+  // Single-threaded
   inline __device__ void set_refnum(int idx, int val) {
     assert(idx >= start_idx && idx <= end_idx);
     int local_idx = idx - start_idx;
     refnum[local_idx] = val;
+
+    revive_mismatches(id, idx, val);
   }
 
   inline __device__ void alloc_msg(message& msg, int idx, size_t size) {
