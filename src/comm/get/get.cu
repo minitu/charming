@@ -491,22 +491,27 @@ __device__ void charm::comm::process_remote() {
 __device__ void charm::comm::cleanup_local() {
   int local_rank = blockIdx.x;
   volatile int* send_status = send_status_local + LOCAL_MSG_MAX * c_n_sms * local_rank;
-  int clup_idx = find_signal_block(send_status, LOCAL_MSG_MAX * c_n_sms,
-      SIGNAL_CLUP, SIGNAL_FREE, false);
+  int clup_idx = INT_MAX;
+  // Repeat until there are no messages left for cleanup
+  // TODO: Make find_signal_block return an array of indices
+  do {
+    clup_idx = find_signal_block(send_status, LOCAL_MSG_MAX * c_n_sms,
+        SIGNAL_CLUP, SIGNAL_FREE, false);
 
-  // If a message needs to be cleaned up, add composite to min-heap
-  if (clup_idx != INT_MAX && threadIdx.x == 0) {
-    uint64_t* send_comp = send_comp_local + LOCAL_MSG_MAX * c_n_sms * local_rank;
-    composite_t comp(send_comp[clup_idx]);
-    addr_heap.push(comp);
-    PDEBUG("%s %d cleanup_local push to heap: "
-        "offset %llu, size %llu, dst local rank %d, msg idx %d\n",
-        s_mem[s_idx::is_pe] ? "PE" : "CE",
-        s_mem[s_idx::is_pe] ? (int)s_mem[s_idx::my_pe] : (int)s_mem[s_idx::my_ce],
-        comp.offset(), comp.size(), clup_idx / LOCAL_MSG_MAX,
-        clup_idx % LOCAL_MSG_MAX);
-  }
-  __syncthreads();
+    // If a message needs to be cleaned up, add composite to min-heap
+    if (clup_idx != INT_MAX && threadIdx.x == 0) {
+      uint64_t* send_comp = send_comp_local + LOCAL_MSG_MAX * c_n_sms * local_rank;
+      composite_t comp(send_comp[clup_idx]);
+      addr_heap.push(comp);
+      PDEBUG("%s %d cleanup_local push to heap: "
+          "offset %llu, size %llu, dst local rank %d, msg idx %d\n",
+          s_mem[s_idx::is_pe] ? "PE" : "CE",
+          s_mem[s_idx::is_pe] ? (int)s_mem[s_idx::my_pe] : (int)s_mem[s_idx::my_ce],
+          comp.offset(), comp.size(), clup_idx / LOCAL_MSG_MAX,
+          clup_idx % LOCAL_MSG_MAX);
+    }
+    __syncthreads();
+  } while (clup_idx != INT_MAX);
 }
 
 __device__ void charm::comm::cleanup_remote() {
