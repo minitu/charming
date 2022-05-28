@@ -24,6 +24,8 @@
 #define REMOTE_MSG_MAX 4
 #define USE_VECTORIZED_LOAD
 #define FIND_MSG_BLOCK
+//#define FIND_MULTIPLE_SIGNALS
+#define MAX_CLEANUP 16
 
 using namespace charm;
 
@@ -213,6 +215,42 @@ __device__ __forceinline__ int find_signal_block(volatile int* status,
   __syncthreads();
 
   return idx;
+}
+
+__device__ __forceinline__ bool find_signals_block(volatile int* status,
+    int count, int old_val, int new_val, int indices[], volatile int& indices_count,
+    int max) {
+  if (threadIdx.x == 0) indices_count = 0;
+  __syncthreads();
+
+  // Look for desired signals
+  for (int i = threadIdx.x; i < count; i += blockDim.x) {
+    if (status[i] == old_val) {
+      while (true) {
+        int cur_count = indices_count;
+        if (cur_count < max) {
+          int ret = atomicCAS_block((int*)&indices_count, cur_count, cur_count+1);
+          if (ret == cur_count) {
+            indices[cur_count] = i;
+            break;
+          }
+        } else {
+          break;
+        }
+      }
+    }
+    __threadfence();
+  }
+  __syncthreads();
+
+  // Update signal if necessary
+  if (threadIdx.x < indices_count && old_val != new_val) {
+    int ret = atomicCAS((int*)&status[indices[threadIdx.x]], old_val, new_val);
+    assert(ret == old_val);
+  }
+  __syncthreads();
+
+  return (indices_count > 0);
 }
 
 __device__ __forceinline__ atomic64_t find_msg_single(volatile atomic64_t* comps,
@@ -514,9 +552,33 @@ __device__ void charm::comm::process_remote() {
 __device__ void charm::comm::cleanup_local() {
   int local_rank = blockIdx.x;
   volatile int* send_status = send_status_local + LOCAL_MSG_MAX * c_n_sms * local_rank;
+
+#ifdef FIND_MULTIPLE_SIGNALS
+  // Clean up to MAX_CLEANUP messages at a time
+  __shared__ int clup_indices[MAX_CLEANUP];
+  __shared__ volatile int clup_count;
+  bool found = find_signals_block(send_status, LOCAL_MSG_MAX * c_n_sms,
+      SIGNAL_CLUP, SIGNAL_FREE, clup_indices, clup_count, MAX_CLEANUP);
+
+  // If a message needs to be cleaned up, add composite to min-heap
+  if (found && threadIdx.x == 0) {
+    uint64_t* send_comp = send_comp_local + LOCAL_MSG_MAX * c_n_sms * local_rank;
+    for (int i = 0; i < clup_count; i++) {
+      int clup_idx = clup_indices[i];
+      composite_t comp(send_comp[clup_idx]);
+      addr_heap.push(comp);
+      PDEBUG("%s %d cleanup_local push to heap: "
+          "offset %llu, size %llu, dst local rank %d, msg idx %d\n",
+          s_mem[s_idx::is_pe] ? "PE" : "CE",
+          s_mem[s_idx::is_pe] ? (int)s_mem[s_idx::my_pe] : (int)s_mem[s_idx::my_ce],
+          comp.offset(), comp.size(), clup_idx / LOCAL_MSG_MAX,
+          clup_idx % LOCAL_MSG_MAX);
+    }
+  }
+  __syncthreads();
+#else
+  // Clean up one message at a time
   int clup_idx = INT_MAX;
-  // Repeat until there are no messages left for cleanup
-  // TODO: Make find_signal_block return an array of indices
   do {
     clup_idx = find_signal_block(send_status, LOCAL_MSG_MAX * c_n_sms,
         SIGNAL_CLUP, SIGNAL_FREE, false);
@@ -535,6 +597,7 @@ __device__ void charm::comm::cleanup_local() {
     }
     __syncthreads();
   } while (clup_idx != INT_MAX);
+#endif
 }
 
 __device__ void charm::comm::cleanup_remote() {
