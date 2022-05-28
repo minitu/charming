@@ -12,15 +12,7 @@
 #define PDEBUG(...) do {} while (0)
 #endif
 
-// Max number of 64-bit values in shared memory
-// Used to coordinate fork-join model in scheduler
-#define SMEM_CNT_MAX 128
-
 extern __constant__ int c_n_sms;
-extern __constant__ int c_n_clusters_dev;
-extern __constant__ int c_cluster_size;
-extern __constant__ int c_n_pes_cluster;
-extern __constant__ int c_n_ces_cluster;
 extern __constant__ int c_my_dev;
 extern __constant__ int c_my_dev_node;
 extern __constant__ int c_n_devs;
@@ -28,6 +20,16 @@ extern __constant__ int c_n_devs_node;
 extern __constant__ int c_n_nodes;
 extern __constant__ int c_n_pes;
 extern __constant__ int c_n_pes_node;
+
+#ifdef SM_LEVEL
+// Max number of 64-bit values in shared memory
+// Used to coordinate fork-join model in scheduler
+#define SMEM_CNT_MAX 128
+
+extern __constant__ int c_n_clusters_dev;
+extern __constant__ int c_cluster_size;
+extern __constant__ int c_n_pes_cluster;
+extern __constant__ int c_n_ces_cluster;
 extern __constant__ int c_n_ces;
 extern __constant__ int c_n_ces_node;
 
@@ -81,5 +83,6 @@ __device__ __forceinline__ int get_ce_from_pe(int pe) {
   int rank_in_cluster = get_local_rank_from_pe(pe) % c_cluster_size;
   return (start_ce + (rank_in_cluster % c_n_ces_cluster));
 }
+#endif // SM_LEVEL
 
 #endif // _COMMON_H_

@@ -9,8 +9,12 @@
 
 namespace charm {
 
+#ifdef SM_LEVEL
 void comm_init_host(int n_sms, int n_pes, int n_ces, int h_n_clusters_dev,
     int n_pes_cluster, int n_ces_cluster);
+#else
+void comm_init_host(int n_pes);
+#endif
 void comm_fini_host();
 
 struct alignas(ALIGN_SIZE) comm {
@@ -22,15 +26,19 @@ struct alignas(ALIGN_SIZE) comm {
   bool begin_term_flag;
   bool do_term_flag;
 
+#ifdef SM_LEVEL
   int* child_local_ranks;
   int child_count;
+#endif
 
   int local_start;
 
   __device__ void init();
+#ifdef SM_LEVEL
   __device__ void process_local();
-  __device__ void process_remote();
   __device__ void cleanup_local();
+#endif
+  __device__ void process_remote();
   __device__ void cleanup_remote();
   __device__ void cleanup_heap();
 };

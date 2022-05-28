@@ -23,25 +23,28 @@ cudaStream_t stream;
 
 // GPU constant memory
 __constant__ int c_n_sms;
-__constant__ int c_n_clusters_dev;
-__constant__ int c_cluster_size;
-__constant__ int c_n_pes_cluster;
-__constant__ int c_n_ces_cluster;
 __constant__ int c_my_dev;
 __constant__ int c_my_dev_node;
 __constant__ int c_n_devs;
 __constant__ int c_n_devs_node;
-__constant__ int c_n_nodes;
 __constant__ int c_n_pes;
 __constant__ int c_n_pes_node;
+__constant__ int c_n_nodes;
+
+#ifdef SM_LEVEL
+__constant__ int c_n_clusters_dev;
+__constant__ int c_cluster_size;
+__constant__ int c_n_pes_cluster;
+__constant__ int c_n_ces_cluster;
 __constant__ int c_n_ces;
 __constant__ int c_n_ces_node;
 
-// GPU global memory
-__device__ __managed__ chare_proxy_table* proxy_tables;
-
 // GPU shared memory
 extern __shared__ uint64_t s_mem[];
+#endif
+
+// GPU global memory
+__device__ __managed__ chare_proxy_table* proxy_tables;
 
 int main(int argc, char* argv[]) {
   // Increase maximum NVSHMEM memory size
@@ -70,19 +73,18 @@ int main(int argc, char* argv[]) {
   cudaGetDeviceProperties(&prop, 0);
   //int max_threads_tb = prop.maxThreadsPerBlock;
   int h_n_sms = prop.multiProcessorCount;
-  //int h_n_sms = 4;
-  int h_n_clusters_dev = 1;
-  int h_cluster_size = h_n_sms / h_n_clusters_dev;
-  int h_n_ces_cluster = 1;
-  int h_n_pes_cluster = h_cluster_size - h_n_ces_cluster;
   int h_my_dev = nvshmem_my_pe();
   int h_my_dev_node = nvshmem_team_my_pe(NVSHMEMX_TEAM_NODE);
   int h_n_devs = nvshmem_n_pes();
   int h_n_devs_node = nvshmem_team_n_pes(NVSHMEMX_TEAM_NODE);
   int h_n_nodes = h_n_devs / h_n_devs_node;
+#ifdef SM_LEVEL
+  int h_n_clusters_dev = 1;
+  int h_cluster_size = h_n_sms / h_n_clusters_dev;
+  int h_n_ces_cluster = 1;
+  int h_n_pes_cluster = h_cluster_size - h_n_ces_cluster;
   int h_n_pes = h_n_devs * h_n_clusters_dev * h_n_pes_cluster;
   int h_n_ces = h_n_devs * h_n_clusters_dev * h_n_ces_cluster;
-  int h_n_pes_node = h_n_pes / h_n_nodes;
   int h_n_ces_node = h_n_ces / h_n_nodes;
 
   // Check if number of PE clusters is valid
@@ -92,6 +94,10 @@ int main(int argc, char* argv[]) {
     }
     return -1;
   }
+#else
+  int h_n_pes = h_n_devs;
+#endif
+  int h_n_pes_node = h_n_pes / h_n_nodes;
 
   // Check for necessary CUDA functionalities
   if (!prop.cooperativeLaunch) {
@@ -122,10 +128,15 @@ int main(int argc, char* argv[]) {
   cuda_check_error();
 
   // Create chare proxy tables
+#ifdef SM_LEVEL
   cudaMallocManaged(&proxy_tables, sizeof(chare_proxy_table) * h_n_sms);
   for (int i = 0; i < h_n_sms; i++) {
     new (&proxy_tables[i]) chare_proxy_table();
   }
+#else
+  cudaMallocManaged(&proxy_tables, sizeof(chare_proxy_table));
+  new (&proxy_tables[0]) chare_proxy_table();
+#endif
 
   // Transfer command line arguments to GPU
   char* m_args; // Contains the actual arguments consecutively
@@ -155,24 +166,30 @@ int main(int argc, char* argv[]) {
 
   // Transfer execution environment constants
   cudaMemcpyToSymbolAsync(c_n_sms, &h_n_sms, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(c_n_clusters_dev, &h_n_clusters_dev, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(c_cluster_size, &h_cluster_size, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(c_n_pes_cluster, &h_n_pes_cluster, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(c_n_ces_cluster, &h_n_ces_cluster, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(c_my_dev, &h_my_dev, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(c_my_dev_node, &h_my_dev_node, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(c_n_devs, &h_n_devs, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(c_n_devs_node, &h_n_devs_node, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(c_n_pes, &h_n_pes, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(c_n_pes_node, &h_n_pes_node, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(c_n_nodes, &h_n_nodes, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
+#ifdef SM_LEVEL
+  cudaMemcpyToSymbolAsync(c_n_clusters_dev, &h_n_clusters_dev, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(c_cluster_size, &h_cluster_size, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(c_n_pes_cluster, &h_n_pes_cluster, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
+  cudaMemcpyToSymbolAsync(c_n_ces_cluster, &h_n_ces_cluster, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(c_n_ces, &h_n_ces, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
   cudaMemcpyToSymbolAsync(c_n_ces_node, &h_n_ces_node, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
-  cudaMemcpyToSymbolAsync(c_n_nodes, &h_n_nodes, sizeof(int), 0, cudaMemcpyHostToDevice, stream);
+#endif
   cuda_check_error();
 
   // Change device limits
   size_t stack_size, heap_size;
+#ifdef SM_LEVEL
   size_t smem_size = SMEM_CNT_MAX * sizeof(uint64_t) + 128;
+#else
+  size_t smem_size = 0;
+#endif
   constexpr size_t new_stack_size = 16384;
   cudaDeviceSetLimit(cudaLimitStackSize, new_stack_size);
   cudaDeviceGetLimit(&stack_size, cudaLimitStackSize);
@@ -193,8 +210,10 @@ int main(int argc, char* argv[]) {
   if (h_my_dev == 0) {
     PINFO("Initiating CharminG\n");
     PINFO("PEs: %d, GPU devices: %d, Nodes: %d\n", h_n_pes, h_n_devs, h_n_nodes);
+#ifdef SM_LEVEL
     PINFO("PE Clusters per device: %d (%d PEs, %d CEs per cluster)\n",
         h_n_clusters_dev, h_n_pes_cluster, h_n_ces_cluster);
+#endif
     PINFO("Thread grid: %d x %d x %d, Thread block: %d x %d x %d\n",
         grid_dim.x, grid_dim.y, grid_dim.z, block_dim.x, block_dim.y, block_dim.z);
     PINFO("Stack size: %llu Bytes, Heap size: %llu Bytes\n", stack_size, heap_size);
@@ -204,8 +223,12 @@ int main(int argc, char* argv[]) {
   }
 
   // Initialize communication module
+#ifdef SM_LEVEL
   comm_init_host(h_n_sms, h_n_pes, h_n_ces, h_n_clusters_dev,
       h_n_pes_cluster, h_n_ces_cluster);
+#else
+  comm_init_host(h_n_pes);
+#endif
   nvshmemx_barrier_all_on_stream(stream);
 
   // Launch scheduler kernel
@@ -223,6 +246,9 @@ int main(int argc, char* argv[]) {
   // Cleanup
   comm_fini_host();
   cudaFree(proxy_tables);
+  cudaFree(m_argvs);
+  cudaFree(m_args);
+  cudaFree(m_argv);
   cudaStreamDestroy(stream);
   nvshmem_finalize();
 #ifdef CHARMING_USE_MPI
@@ -245,7 +271,13 @@ __device__ void charm::abort() {
   __syncthreads();
 }
 
-__device__ int charm::my_pe() { return s_mem[s_idx::my_pe]; }
+__device__ int charm::my_pe() {
+#ifdef SM_LEVEL
+  return s_mem[s_idx::my_pe];
+#else
+  return c_my_dev;
+#endif
+}
 __device__ int charm::n_pes() { return c_n_pes; }
 __device__ int charm::n_pes_node() { return c_n_pes_node; }
 __device__ int charm::n_nodes() { return c_n_nodes; }

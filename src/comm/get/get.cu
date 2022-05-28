@@ -17,8 +17,12 @@
 //#define NVSHMEM_BLOCK_COMM // Use NVSHMEM's thread block implementation
 #define NVSHMEM_MEMCPY // Use NVSHMEM's memcpy function
 
+#ifdef SM_LEVEL
 #define MBUF_PE_SIZE 8388608 // 8MB per PE
 #define MBUF_CE_SIZE 134217728 // 128MB per CE
+#else
+#define MBUF_SIZE 1073741824 // 1GB per GPU
+#endif
 
 #define LOCAL_MSG_MAX 4 // Should always be a multiple of 4 for vectorized loads
 #define REMOTE_MSG_MAX 4
@@ -38,21 +42,20 @@ __managed__ void* nvshmem_buf; // NVSHMEM
 
 __managed__ ringbuf_t* mbuf; // Managed
 
+#ifdef SM_LEVEL
 __managed__ volatile int* send_status_local; // Global
-__managed__ uint64_t* send_status_remote; // NVSHMEM
-__managed__ size_t* send_status_remote_idx; // Global
-
 __managed__ uint64_t* send_comp_local; // Global
-__managed__ uint64_t* send_comp_remote; // Global
-
 __managed__ volatile atomic64_t* recv_comp_local; // Global
-__managed__ uint64_t* recv_comp_remote; // NVSHMEM
-__managed__ size_t* recv_comp_remote_idx; // Global
-
-__managed__ composite_t* heap_buf; // Global
 
 // GPU shared memory
 extern __shared__ uint64_t s_mem[];
+#endif
+__managed__ uint64_t* send_status_remote; // NVSHMEM
+__managed__ size_t* send_status_remote_idx; // Global
+__managed__ uint64_t* send_comp_remote; // Global
+__managed__ uint64_t* recv_comp_remote; // NVSHMEM
+__managed__ size_t* recv_comp_remote_idx; // Global
+__managed__ composite_t* heap_buf; // Global
 
 enum {
   SIGNAL_FREE = 0,
@@ -60,14 +63,29 @@ enum {
   SIGNAL_CLUP = 2
 };
 
+#ifdef SM_LEVEL
 void charm::comm_init_host(int n_sms, int n_pes, int n_ces, int n_clusters_dev,
-    int n_pes_cluster, int n_ces_cluster) {
+    int n_pes_cluster, int n_ces_cluster)
+#else
+void charm::comm_init_host(int n_pes)
+#endif
+{
   // Allocate NVSHMEM message buffer
+  size_t mbuf_size;
+  size_t mbuf_meta_size;
+#ifdef SM_LEVEL
   size_t mbuf_cluster_size = MBUF_PE_SIZE * n_pes_cluster + MBUF_CE_SIZE * n_ces_cluster;
-  nvshmem_buf = nvshmem_malloc(mbuf_cluster_size * n_clusters_dev);
+  mbuf_size = mbuf_cluster_size * n_clusters_dev;
+  mbuf_meta_size = sizeof(ringbuf_t) * n_sms;
+#else
+  mbuf_size = MBUF_SIZE;
+  mbuf_meta_size = sizeof(ringbuf_t);
+#endif
+  nvshmem_buf = nvshmem_malloc(mbuf_size);
   assert(nvshmem_buf);
-  cudaMallocManaged(&mbuf, sizeof(ringbuf_t) * n_sms);
+  cudaMallocManaged(&mbuf, mbuf_meta_size);
   assert(mbuf);
+#ifdef SM_LEVEL
   ringbuf_t* cur_mbuf = mbuf;
   size_t start_offset = 0;
   for (int i = 0; i < n_sms; i++) {
@@ -79,38 +97,46 @@ void charm::comm_init_host(int n_sms, int n_pes, int n_ces, int n_clusters_dev,
     start_offset += mbuf_size;
     cur_mbuf++;
   }
+#endif
 
   // Allocate data structures
+#ifdef SM_LEVEL
   int n_ces_dev = n_ces_cluster * n_clusters_dev;
   size_t local_count = LOCAL_MSG_MAX * n_sms * n_sms;
   size_t remote_count = REMOTE_MSG_MAX * n_ces * n_ces_dev;
   size_t status_local_size = sizeof(int) * local_count;
+  size_t comp_local_size = sizeof(atomic64_t) * local_count;
+  size_t heap_size = sizeof(composite_t) * local_count * 2;
+  cudaMalloc(&send_status_local, status_local_size);
+  cudaMalloc(&send_comp_local, comp_local_size);
+  cudaMalloc(&recv_comp_local, comp_local_size);
+  assert(send_status_local && send_comp_local && recv_comp_local);
+#else
+  size_t remote_count = REMOTE_MSG_MAX * n_pes;
+  size_t heap_size = sizeof(composite_t) * remote_count * 2;
+#endif
   size_t status_remote_size = sizeof(uint64_t) * remote_count;
   size_t idx_size = sizeof(size_t) * remote_count;
-  size_t comp_local_size = sizeof(atomic64_t) * local_count;
   size_t comp_remote_size = sizeof(atomic64_t) * remote_count;
-  size_t heap_size = sizeof(composite_t) * local_count * 2;
   assert(sizeof(atomic64_t) == sizeof(uint64_t));
-  cudaMalloc(&send_status_local, status_local_size);
   send_status_remote = (uint64_t*)nvshmem_malloc(status_remote_size);
   cudaMalloc(&send_status_remote_idx, idx_size);
-  cudaMalloc(&send_comp_local, comp_local_size);
   cudaMalloc(&send_comp_remote, comp_remote_size);
-  cudaMalloc(&recv_comp_local, comp_local_size);
   recv_comp_remote = (uint64_t*)nvshmem_malloc(comp_remote_size);
   cudaMalloc(&recv_comp_remote_idx, idx_size);
   cudaMalloc(&heap_buf, heap_size);
-  assert(send_status_local && send_status_remote && send_status_remote_idx
-      && send_comp_local && send_comp_remote && recv_comp_local
+  assert(send_status_remote && send_status_remote_idx && send_comp_remote
       && recv_comp_remote && recv_comp_remote_idx && heap_buf);
 
   // Clear data structures
+#ifdef SM_LEVEL
   cudaMemsetAsync((void*)send_status_local, 0, status_local_size, stream);
+  cudaMemsetAsync((void*)send_comp_local, 0, comp_local_size, stream);
+  cudaMemsetAsync((void*)recv_comp_local, 0, comp_local_size, stream);
+#endif
   cudaMemsetAsync((void*)send_status_remote, 0, status_remote_size, stream);
   cudaMemsetAsync((void*)send_status_remote_idx, 0, idx_size, stream);
-  cudaMemsetAsync((void*)send_comp_local, 0, comp_local_size, stream);
   cudaMemsetAsync((void*)send_comp_remote, 0, comp_remote_size, stream);
-  cudaMemsetAsync((void*)recv_comp_local, 0, comp_local_size, stream);
   cudaMemsetAsync((void*)recv_comp_remote, 0, comp_remote_size, stream);
   cudaMemsetAsync((void*)recv_comp_remote_idx, 0, idx_size, stream);
   cudaMemsetAsync((void*)heap_buf, 0, heap_size, stream);
@@ -124,12 +150,14 @@ void charm::comm_fini_host() {
 
   // Free data structures
   cudaFree((void*)mbuf);
+#ifdef SM_LEVEL
   cudaFree((void*)send_status_local);
+  cudaFree((void*)send_comp_local);
+  cudaFree((void*)recv_comp_local);
+#endif
   nvshmem_free(send_status_remote);
   cudaFree((void*)send_status_remote_idx);
-  cudaFree((void*)send_comp_local);
   cudaFree((void*)send_comp_remote);
-  cudaFree((void*)recv_comp_local);
   nvshmem_free(recv_comp_remote);
   cudaFree((void*)recv_comp_remote_idx);
   cudaFree((void*)heap_buf);
@@ -138,15 +166,21 @@ void charm::comm_fini_host() {
 // Single-threaded
 __device__ void charm::comm::init() {
   // Initialize min-heap
+#ifdef SM_LEVEL
   int comp_count = LOCAL_MSG_MAX * c_n_sms * 2;
   composite_t* my_heap_buf = heap_buf + comp_count * blockIdx.x;
   addr_heap.init(my_heap_buf, comp_count);
+#else
+  int comp_count = REMOTE_MSG_MAX * n_pes * 2;
+  addr_heap.init(heap_buf, comp_count);
+#endif
 
   sent_term_flag = false;
   begin_term_flag = false;
   do_term_flag = false;
   local_start = 0;
 
+#ifdef SM_LEVEL
   if (!s_mem[s_idx::is_pe]) {
     // Store local ranks and count of child PEs for this CE
     child_count = 0;
@@ -163,6 +197,7 @@ __device__ void charm::comm::init() {
       }
     }
   }
+#endif
 }
 
 __device__ __forceinline__ int find_signal_single(volatile int* status,
