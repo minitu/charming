@@ -52,10 +52,22 @@ struct mismatch_t {
 };
 
 struct chare_proxy_base {
-  int id;
+  int id; // Chare array ID
+
+  int n_local; // Number of local chares
+  int n_total; // Total number of chares
+  int start_idx; // Starting index of local chares
+  int end_idx; // Ending index of local chares
+
+  int* loc_map; // Chare-PE location map
+
+  int em_count; // Number of registered entry methods
+
+  int *refnum; // Reference numbers
   mismatch_t* mismatches;
 
-  __device__ chare_proxy_base() {}
+  __device__ chare_proxy_base() : id(-1), n_local(0), n_total(0), start_idx(-1),
+  end_idx(-1), loc_map(nullptr), em_count(0), refnum(nullptr), mismatches(nullptr)  {}
   __device__ virtual bool call(int idx, int ep, void* arg, int ref) = 0;
 };
 
@@ -76,22 +88,10 @@ namespace charm {
 template <typename C>
 struct chare_proxy : chare_proxy_base {
   C** objects; // Chare objects on this PE (local chares)
-  int *refnum;
-
-  int n_local; // Number of local chares
-  int n_total; // Total number of chares
-
-  int start_idx; // Starting index of local chares
-  int end_idx; // Ending index of local chares
-
-  int* loc_map; // Chare-PE location map
-
   entry_method_base<C>** entry_methods; // Entry methods
-  int em_count; // Number of registered entry methods
 
   __device__ chare_proxy()
-    : objects(nullptr), refnum(nullptr), n_local(0), n_total(0), start_idx(-1),
-    end_idx(-1), loc_map(nullptr), entry_methods(nullptr), em_count(0) {
+    : chare_proxy_base(), objects(nullptr), entry_methods(nullptr) {
     // Store this proxy for the runtime
     chare_proxy_table& my_proxy_table = proxy_tables[blockIdx.x];
     id = my_proxy_table.count++;
@@ -165,7 +165,8 @@ struct chare_proxy : chare_proxy_base {
     int local_idx = idx - start_idx;
 
     // Don't execute the entry method if reference number doesn't match
-    if (ref != refnum[local_idx]) {
+    // (unless it is -1)
+    if (ref != -1 && ref != refnum[local_idx]) {
       return false;
     }
 

@@ -27,6 +27,7 @@ __device__ void charm::main(int argc, char** argv, size_t* argvs, int pe) {
     block_proxy = new charm::chare_proxy<Block>();
     block_proxy->add_entry_method<&entry_init>();
     block_proxy->add_entry_method<&entry_recv_halo>();
+    block_proxy->add_entry_method<&entry_terminate>();
 
     // Create chares
     block_proxy->create(n_chares);
@@ -73,7 +74,8 @@ __device__ void Block::init(void* arg) {
     npes = charm::chare::n;
     mype = charm::chare::i;
     recv_count = 0;
-    printf("Block %d init\n", mype);
+    term_count = 0;
+    printf("Block %3d init\n", mype);
 
     // Compute chunk size and allocate memory
     int chunk_size_low = (ny - 2) / npes;
@@ -155,9 +157,7 @@ __device__ void Block::recv_halo(void* arg) {
 
       if (iter == iter_max) {
         end = true;
-        if (mype == 0) {
-          printf("Completed %d iterations\n", iter_max);
-        }
+        printf("Chare %3d completed %d iterations\n", mype, iter_max);
       }
     }
   }
@@ -165,10 +165,22 @@ __device__ void Block::recv_halo(void* arg) {
 
   if (done) {
     if (end) {
-      charm::end();
+      block_proxy->invoke(0, 2, nullptr, 0, -1);
     } else {
       update();
     }
+  }
+}
+
+__device__ void Block::terminate(void* arg) {
+  // Terminate only when all chares have finished
+  if (threadIdx.x == 0) {
+    term_count++;
+  }
+  __syncthreads();
+
+  if (term_count == npes) {
+    charm::end();
   }
 }
 

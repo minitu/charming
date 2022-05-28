@@ -355,7 +355,7 @@ __device__ void charm::comm::process_local() {
           }
         }
         if (mismatch_idx == -1) {
-          PERROR("Element %d ran out of mismatches\n", blockIdx.x);
+          PERROR("Element %d chare ID %d ran out of mismatches\n", blockIdx.x, msg->chare_id);
           assert(false);
         }
         mismatch_t& mismatch = mismatches[mismatch_idx];
