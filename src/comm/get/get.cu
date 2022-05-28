@@ -49,6 +49,8 @@ __managed__ volatile atomic64_t* recv_comp_local; // Global
 
 // GPU shared memory
 extern __shared__ uint64_t s_mem[];
+#else
+__device__ comm* comm_module;
 #endif
 __managed__ uint64_t* send_status_remote; // NVSHMEM
 __managed__ size_t* send_status_remote_idx; // Global
@@ -97,6 +99,8 @@ void charm::comm_init_host(int n_pes)
     start_offset += mbuf_size;
     cur_mbuf++;
   }
+#else
+  mbuf->init(nvshmem_buf, 0, mbuf_size);
 #endif
 
   // Allocate data structures
@@ -171,7 +175,7 @@ __device__ void charm::comm::init() {
   composite_t* my_heap_buf = heap_buf + comp_count * blockIdx.x;
   addr_heap.init(my_heap_buf, comp_count);
 #else
-  int comp_count = REMOTE_MSG_MAX * n_pes * 2;
+  int comp_count = REMOTE_MSG_MAX * c_n_pes * 2;
   addr_heap.init(heap_buf, comp_count);
 #endif
 
@@ -200,6 +204,7 @@ __device__ void charm::comm::init() {
 #endif
 }
 
+#ifdef SM_LEVEL
 __device__ __forceinline__ int find_signal_single(volatile int* status,
     int count, int old_val, int new_val, bool loop) {
   int idx = INT_MAX;
@@ -458,6 +463,57 @@ __device__ void charm::comm::process_local() {
   }
 }
 
+__device__ void charm::comm::cleanup_local() {
+  int local_rank = blockIdx.x;
+  volatile int* send_status = send_status_local + LOCAL_MSG_MAX * c_n_sms * local_rank;
+
+#ifdef FIND_MULTIPLE_SIGNALS
+  // Clean up to MAX_CLEANUP messages at a time
+  __shared__ int clup_indices[MAX_CLEANUP];
+  __shared__ volatile int clup_count;
+  bool found = find_signals_block(send_status, LOCAL_MSG_MAX * c_n_sms,
+      SIGNAL_CLUP, SIGNAL_FREE, clup_indices, clup_count, MAX_CLEANUP);
+
+  // If a message needs to be cleaned up, add composite to min-heap
+  if (found && threadIdx.x == 0) {
+    uint64_t* send_comp = send_comp_local + LOCAL_MSG_MAX * c_n_sms * local_rank;
+    for (int i = 0; i < clup_count; i++) {
+      int clup_idx = clup_indices[i];
+      composite_t comp(send_comp[clup_idx]);
+      addr_heap.push(comp);
+      PDEBUG("%s %d cleanup_local push to heap: "
+          "offset %llu, size %llu, dst local rank %d, msg idx %d\n",
+          s_mem[s_idx::is_pe] ? "PE" : "CE",
+          s_mem[s_idx::is_pe] ? (int)s_mem[s_idx::my_pe] : (int)s_mem[s_idx::my_ce],
+          comp.offset(), comp.size(), clup_idx / LOCAL_MSG_MAX,
+          clup_idx % LOCAL_MSG_MAX);
+    }
+  }
+  __syncthreads();
+#else
+  // Clean up one message at a time
+  int clup_idx = INT_MAX;
+  do {
+    clup_idx = find_signal_block(send_status, LOCAL_MSG_MAX * c_n_sms,
+        SIGNAL_CLUP, SIGNAL_FREE, false);
+
+    // If a message needs to be cleaned up, add composite to min-heap
+    if (clup_idx != INT_MAX && threadIdx.x == 0) {
+      uint64_t* send_comp = send_comp_local + LOCAL_MSG_MAX * c_n_sms * local_rank;
+      composite_t comp(send_comp[clup_idx]);
+      addr_heap.push(comp);
+      PDEBUG("%s %d cleanup_local push to heap: "
+          "offset %llu, size %llu, dst local rank %d, msg idx %d\n",
+          s_mem[s_idx::is_pe] ? "PE" : "CE",
+          s_mem[s_idx::is_pe] ? (int)s_mem[s_idx::my_pe] : (int)s_mem[s_idx::my_ce],
+          comp.offset(), comp.size(), clup_idx / LOCAL_MSG_MAX,
+          clup_idx % LOCAL_MSG_MAX);
+    }
+    __syncthreads();
+  } while (clup_idx != INT_MAX);
+#endif
+}
+
 __device__ void charm::comm::process_remote() {
   int dst_local_rank = blockIdx.x;
   int dst_ce = s_mem[s_idx::my_ce];
@@ -580,59 +636,8 @@ __device__ void charm::comm::process_remote() {
     }
 
     // Reset indices array for next use
-    memset_kernel(recv_comp_idx, 0, REMOTE_MSG_MAX * c_n_ces * sizeof(size_t));
+    memset_kernel_block(recv_comp_idx, 0, REMOTE_MSG_MAX * c_n_ces * sizeof(size_t));
   }
-}
-
-__device__ void charm::comm::cleanup_local() {
-  int local_rank = blockIdx.x;
-  volatile int* send_status = send_status_local + LOCAL_MSG_MAX * c_n_sms * local_rank;
-
-#ifdef FIND_MULTIPLE_SIGNALS
-  // Clean up to MAX_CLEANUP messages at a time
-  __shared__ int clup_indices[MAX_CLEANUP];
-  __shared__ volatile int clup_count;
-  bool found = find_signals_block(send_status, LOCAL_MSG_MAX * c_n_sms,
-      SIGNAL_CLUP, SIGNAL_FREE, clup_indices, clup_count, MAX_CLEANUP);
-
-  // If a message needs to be cleaned up, add composite to min-heap
-  if (found && threadIdx.x == 0) {
-    uint64_t* send_comp = send_comp_local + LOCAL_MSG_MAX * c_n_sms * local_rank;
-    for (int i = 0; i < clup_count; i++) {
-      int clup_idx = clup_indices[i];
-      composite_t comp(send_comp[clup_idx]);
-      addr_heap.push(comp);
-      PDEBUG("%s %d cleanup_local push to heap: "
-          "offset %llu, size %llu, dst local rank %d, msg idx %d\n",
-          s_mem[s_idx::is_pe] ? "PE" : "CE",
-          s_mem[s_idx::is_pe] ? (int)s_mem[s_idx::my_pe] : (int)s_mem[s_idx::my_ce],
-          comp.offset(), comp.size(), clup_idx / LOCAL_MSG_MAX,
-          clup_idx % LOCAL_MSG_MAX);
-    }
-  }
-  __syncthreads();
-#else
-  // Clean up one message at a time
-  int clup_idx = INT_MAX;
-  do {
-    clup_idx = find_signal_block(send_status, LOCAL_MSG_MAX * c_n_sms,
-        SIGNAL_CLUP, SIGNAL_FREE, false);
-
-    // If a message needs to be cleaned up, add composite to min-heap
-    if (clup_idx != INT_MAX && threadIdx.x == 0) {
-      uint64_t* send_comp = send_comp_local + LOCAL_MSG_MAX * c_n_sms * local_rank;
-      composite_t comp(send_comp[clup_idx]);
-      addr_heap.push(comp);
-      PDEBUG("%s %d cleanup_local push to heap: "
-          "offset %llu, size %llu, dst local rank %d, msg idx %d\n",
-          s_mem[s_idx::is_pe] ? "PE" : "CE",
-          s_mem[s_idx::is_pe] ? (int)s_mem[s_idx::my_pe] : (int)s_mem[s_idx::my_ce],
-          comp.offset(), comp.size(), clup_idx / LOCAL_MSG_MAX,
-          clup_idx % LOCAL_MSG_MAX);
-    }
-    __syncthreads();
-  } while (clup_idx != INT_MAX);
-#endif
 }
 
 __device__ void charm::comm::cleanup_remote() {
@@ -678,7 +683,7 @@ __device__ void charm::comm::cleanup_remote() {
     __syncthreads();
 
     // Reset indices array for next use
-    memset_kernel(send_status_idx, 0, REMOTE_MSG_MAX * c_n_ces * sizeof(size_t));
+    memset_kernel_block(send_status_idx, 0, REMOTE_MSG_MAX * c_n_ces * sizeof(size_t));
   }
 }
 
@@ -716,17 +721,6 @@ __device__ void charm::comm::cleanup_heap() {
   }
   __syncthreads();
 }
-
-/*
-__device__ void charm::message::alloc(int idx, int ep, size_t size) {
-  size_t msg_size = envelope::alloc_size(sizeof(regular_msg) + size);
-  env = create_envelope(msgtype::user, msg_size, &offset);
-}
-
-__device__ void charm::message::free() {
-  // TODO
-}
-*/
 
 // Single-threaded
 __device__ envelope* charm::create_envelope(msgtype type, size_t payload_size,
@@ -817,6 +811,54 @@ __device__ void charm::send_remote_msg(envelope* env, size_t offset, int dst_ce)
   __syncthreads();
 }
 
+__device__ void charm::send_delegate_msg(request_msg* req) {
+  // Prepare message for sending remotely
+  if (threadIdx.x == 0) {
+    envelope* env = nullptr;
+    if (req->type == msgtype::regular) {
+      // Need to send to CE responsible for target PE
+      env = create_envelope(msgtype::forward, req->payload_size,
+          (size_t&)s_mem[s_idx::offset]);
+
+      forward_msg* msg = new ((char*)env + sizeof(envelope)) forward_msg(
+          req->chare_id, req->chare_idx, req->ep_id, req->dst_pe, req->refnum);
+
+      if (req->payload_size > 0) {
+        s_mem[s_idx::dst] = (uint64_t)((char*)msg + sizeof(forward_msg));
+        s_mem[s_idx::src] = (uint64_t)req->buf;
+        s_mem[s_idx::size] = (uint64_t)req->payload_size;
+      }
+      s_mem[s_idx::dst_ce] = (uint64_t)get_ce_from_pe(req->dst_pe);
+    } else if (req->type == msgtype::begin_terminate) {
+      // Send begin termination message to CE 0
+      env = create_envelope(msgtype::begin_terminate, 0,
+          (size_t&)s_mem[s_idx::offset]);
+
+      s_mem[s_idx::dst_ce] = 0;
+    } else {
+      PERROR("CE %d invalid message type %d in send_delegate_msg\n",
+          (int)s_mem[s_idx::my_ce], req->type);
+      assert(false);
+    }
+    s_mem[s_idx::env] = (uint64_t)env;
+  }
+  __syncthreads();
+
+  // Fill in payload
+  if (req->payload_size > 0) {
+#ifdef NVSHMEM_MEMCPY
+    nvshmem_memcpy_block((void*)s_mem[s_idx::dst], (void*)s_mem[s_idx::src],
+        (size_t)s_mem[s_idx::size]);
+#else
+    memcpy_kernel_block((void*)s_mem[s_idx::dst], (void*)s_mem[s_idx::src],
+        (size_t)s_mem[s_idx::size]);
+#endif
+  }
+
+  send_remote_msg((envelope*)s_mem[s_idx::env], (size_t)s_mem[s_idx::offset],
+      (int)s_mem[s_idx::dst_ce]);
+}
+
 __device__ void charm::send_reg_msg(int chare_id, int chare_idx, int ep_id,
     void* buf, size_t payload_size, int dst_pe, int refnum) {
   if (threadIdx.x == 0) {
@@ -859,7 +901,7 @@ __device__ void charm::send_reg_msg(int chare_id, int chare_idx, int ep_id,
     nvshmem_memcpy_block((void*)s_mem[s_idx::dst], (void*)s_mem[s_idx::src],
         (size_t)s_mem[s_idx::size]);
 #else
-    memcpy_kernel((void*)s_mem[s_idx::dst], (void*)s_mem[s_idx::src],
+    memcpy_kernel_block((void*)s_mem[s_idx::dst], (void*)s_mem[s_idx::src],
         (size_t)s_mem[s_idx::size]);
 #endif
   }
@@ -867,80 +909,6 @@ __device__ void charm::send_reg_msg(int chare_id, int chare_idx, int ep_id,
   // Send a local message either directly to dst PE or to a responsible CE
   send_local_msg((envelope*)s_mem[s_idx::env], (size_t)s_mem[s_idx::offset],
       (int)s_mem[s_idx::local_rank]);
-}
-
-__device__ void charm::send_delegate_msg(request_msg* req) {
-  // Prepare message for sending remotely
-  if (threadIdx.x == 0) {
-    envelope* env = nullptr;
-    if (req->type == msgtype::regular) {
-      // Need to send to CE responsible for target PE
-      env = create_envelope(msgtype::forward, req->payload_size,
-          (size_t&)s_mem[s_idx::offset]);
-
-      forward_msg* msg = new ((char*)env + sizeof(envelope)) forward_msg(
-          req->chare_id, req->chare_idx, req->ep_id, req->dst_pe, req->refnum);
-
-      if (req->payload_size > 0) {
-        s_mem[s_idx::dst] = (uint64_t)((char*)msg + sizeof(forward_msg));
-        s_mem[s_idx::src] = (uint64_t)req->buf;
-        s_mem[s_idx::size] = (uint64_t)req->payload_size;
-      }
-      s_mem[s_idx::dst_ce] = (uint64_t)get_ce_from_pe(req->dst_pe);
-    } else if (req->type == msgtype::begin_terminate) {
-      // Send begin termination message to CE 0
-      env = create_envelope(msgtype::begin_terminate, 0,
-          (size_t&)s_mem[s_idx::offset]);
-
-      s_mem[s_idx::dst_ce] = 0;
-    } else {
-      PERROR("CE %d invalid message type %d in send_delegate_msg\n",
-          (int)s_mem[s_idx::my_ce], req->type);
-      assert(false);
-    }
-    s_mem[s_idx::env] = (uint64_t)env;
-  }
-  __syncthreads();
-
-  // Fill in payload
-  if (req->payload_size > 0) {
-#ifdef NVSHMEM_MEMCPY
-    nvshmem_memcpy_block((void*)s_mem[s_idx::dst], (void*)s_mem[s_idx::src],
-        (size_t)s_mem[s_idx::size]);
-#else
-    memcpy_kernel((void*)s_mem[s_idx::dst], (void*)s_mem[s_idx::src],
-        (size_t)s_mem[s_idx::size]);
-#endif
-  }
-
-  send_remote_msg((envelope*)s_mem[s_idx::env], (size_t)s_mem[s_idx::offset],
-      (int)s_mem[s_idx::dst_ce]);
-}
-
-// TODO
-__device__ __forceinline__ void send_user_msg_common(int chare_id, int chare_idx,
-    int ep_id, const message& msg) {
-  envelope* env = msg.env;
-  if (threadIdx.x == 0) {
-    // Set regular message fields using placement new
-    new ((char*)env + sizeof(envelope)) regular_msg(chare_id, chare_idx, ep_id, -1);
-  }
-  __syncthreads();
-
-  //send_msg(env, msg.offset, msg.dst_pe);
-}
-
-__device__ void charm::send_user_msg(int chare_id, int chare_idx, int ep_id,
-    const message& msg) {
-  send_user_msg_common(chare_id, chare_idx, ep_id, msg);
-}
-
-__device__ void charm::send_user_msg(int chare_id, int chare_idx, int ep_id,
-    const message& msg, size_t payload_size) {
-  // Send size can be smaller than allocated message size
-  msg.env->size = envelope::alloc_size(msgtype::user, payload_size);
-
-  send_user_msg_common(chare_id, chare_idx, ep_id, msg);
 }
 
 __device__ void charm::send_begin_term_msg() {
@@ -1016,24 +984,344 @@ __device__ void charm::send_do_term_msg_pe(int dst_local_rank) {
   send_local_msg((envelope*)s_mem[s_idx::env], (size_t)s_mem[s_idx::offset],
       dst_local_rank);
 }
+#else
+__device__ void charm::comm::process_remote() {
+  int dst_pe = my_pe();
+
+  // Check if there are any incoming messages
+  uint64_t* recv_comp = recv_comp_remote;
+  size_t* recv_comp_idx = recv_comp_remote_idx;
+#ifdef NVSHMEM_BLOCK_EXT
+  if (BID == 0) {
+    size_t count_block = nvshmem_uint64_test_some_block(recv_comp,
+        REMOTE_MSG_MAX * c_n_pes, recv_comp_idx, NVSHMEM_CMP_GT, 0);
+    if (GID == 0) {
+      count = count_block;
+    }
+  }
+#else
+  if (GID == 0) {
+    count = nvshmem_uint64_test_some(recv_comp, REMOTE_MSG_MAX * c_n_pes,
+        recv_comp_idx, nullptr, NVSHMEM_CMP_GT, 0);
+  }
+#endif
+  barrier_local();
+
+  if (count > 0) {
+    for (size_t i = 0; i < count; i++) {
+      size_t found_idx;
+      size_t msg_size;
+      int src_pe;
+      size_t msg_idx;
+      if (GID == 0) {
+        // Obtain information about this message
+        found_idx = recv_comp_idx[i];
+        uint64_t data = nvshmem_signal_fetch(recv_comp + found_idx);
+        composite_t src_composite(data);
+        size_t src_offset = src_composite.offset();
+        msg_size = src_composite.size();
+        src_pe = found_idx / REMOTE_MSG_MAX;
+        msg_idx = found_idx % REMOTE_MSG_MAX;
+
+        // Reserve space for incoming message
+        bool success = mbuf->acquire(msg_size, dst_offset);
+        if (!success) {
+          PERROR("PE %d: Not enough space in message buffer\n", dst_pe);
+          assert(false);
+        }
+        PDEBUG("PE %d acquired space for incoming remote message: offset %llu, size %llu\n",
+            dst_pe, dst_offset, msg_size);
+
+        // Perform a get operation to fetch the message
+        // TODO: Make asynchronous
+        dst_addr = mbuf->addr(dst_offset);
+        void* src_addr = mbuf->addr(src_offset);
+        nvshmem_char_get((char*)dst_addr, (char*)src_addr, msg_size, src_pe);
+        PDEBUG("PE %d remote get: src offset %llu, dst offset %llu, "
+            "size %llu, src PE %d, idx %llu\n", dst_pe, src_offset, dst_offset,
+            msg_size, src_pe, msg_idx);
+      }
+      barrier_local();
+
+      // Process message in parallel (with the entire grid)
+      msgtype type;
+      bool success = process_msg(dst_addr, dst_offset, type, begin_term_flag,
+          do_term_flag);
+
+      if (success && GID == 0) {
+        // Clear message request
+        // FIXME: Need fence after?
+        nvshmemx_signal_op(recv_comp + found_idx, SIGNAL_FREE, NVSHMEM_SIGNAL_SET,
+            dst_pe);
+
+        uint64_t* src_send_status = send_status_remote + REMOTE_MSG_MAX * dst_pe;
+        int signal = SIGNAL_FREE;
+#ifndef NO_CLEANUP
+        // Store composite to be cleared from memory
+        composite_t dst_composite(dst_offset, msg_size);
+        addr_heap.push(dst_composite);
+        signal = (type == msgtype::user) ? SIGNAL_FREE : SIGNAL_CLUP;
+        PDEBUG("PE %d process_remote signal cleanup & push to heap: signal %d, "
+            "offset %llu, size %llu, src PE %d, idx %llu\n", dst_pe, signal,
+            dst_composite.offset(), dst_composite.size(), src_pe, msg_idx);
+#endif
+        // Notify sender that message has been delivered
+        nvshmemx_signal_op(src_send_status + msg_idx, signal, NVSHMEM_SIGNAL_SET,
+            src_pe);
+      }
+      barrier_local();
+    }
+
+    // Reset indices array for next use
+    memset_kernel_grid(recv_comp_idx, 0, REMOTE_MSG_MAX * c_n_pes * sizeof(size_t));
+  }
+}
+
+__device__ void charm::comm::cleanup_remote() {
+  int dst_pe = my_pe();
+
+  // Check for messages that have been delivered to the destination PE
+  uint64_t* send_status = send_status_remote;
+  uint64_t* send_status_idx = send_status_remote_idx;
+#ifdef NVSHMEM_BLOCK_EXT
+  if (BID == 0) {
+    size_t count_block = nvshmem_uint64_test_some_block(send_status,
+        REMOTE_MSG_MAX * c_n_pes, send_status_idx, NVSHMEM_CMP_EQ, SIGNAL_CLUP);
+    if (GID == 0) {
+      count = count_block;
+    }
+  }
+#else
+  if (GID == 0) {
+    count = nvshmem_uint64_test_some(send_status, REMOTE_MSG_MAX * c_n_pes,
+        send_status_idx, nullptr, NVSHMEM_CMP_EQ, SIGNAL_CLUP);
+  }
+#endif
+  barrier_local();
+
+  // Push composites to min-heap for cleanup
+  if (count > 0) {
+    if (GID == 0) {
+      uint64_t* send_comp = send_comp_remote;
+
+      for (size_t i = 0; i < count; i++) {
+        size_t found_idx = send_status_idx[i];
+        composite_t src_composite(send_comp[found_idx]);
+        addr_heap.push(src_composite);
+        PDEBUG("PE %d cleanup_remote push to heap: offset %llu, size %llu, "
+            "dst PE %llu, idx %llu, found_idx %llu\n", dst_pe,
+            src_composite.offset(), src_composite.size(),
+            found_idx / REMOTE_MSG_MAX, found_idx % REMOTE_MSG_MAX, found_idx);
+
+        // Reset signal to SIGNAL_FREE
+        nvshmemx_signal_op(send_status + found_idx, SIGNAL_FREE,
+            NVSHMEM_SIGNAL_SET, dst_pe);
+      }
+    }
+    barrier_local();
+
+    // Reset indices array for next use
+    memset_kernel_grid(send_status_idx, 0, REMOTE_MSG_MAX * c_n_pes * sizeof(size_t));
+  }
+}
+
+__device__ void charm::comm::cleanup_heap() {
+  int dst_pe = my_pe();
+
+  // Check min-heap and free messages
+  if (GID == 0) {
+    composite_t top;
+    size_t clup_offset;
+    size_t clup_size;
+    while (true) {
+      top = addr_heap.top();
+      if (top.data == UINT64_MAX) break;
+
+      clup_offset = top.offset();
+      clup_size = top.size();
+      if ((clup_offset == mbuf->start_offset + mbuf->read) && clup_size > 0) {
+        bool success = mbuf->release(clup_size);
+        if (!success) {
+          PERROR("PE %d failed to release message: offset %llu, size %llu\n",
+              dst_pe, clup_offset, clup_size);
+          mbuf->print();
+          assert(false);
+        }
+        addr_heap.pop();
+        PDEBUG("PE %d releasing message: offset %llu, size %llu\n",
+            dst_pe, clup_offset, clup_size);
+      } else break;
+    }
+  }
+  barrier_local();
+}
+
+// Single-threaded
+__device__ envelope* charm::create_envelope(msgtype type, size_t payload_size,
+    size_t& offset) {
+  size_t msg_size = envelope::alloc_size(type, payload_size);
+
+  // Reserve space for this message in message buffer
+  int pe = my_pe();
+  bool success = mbuf->acquire(msg_size, offset);
+  if (!success) {
+    PERROR("PE %d: Not enough space in message buffer\n", pe);
+    mbuf->print();
+    assert(false);
+  }
+  PDEBUG("PE %d acquired message: offset %llu, size %llu\n",
+      pe, offset, msg_size);
+
+  // Create envelope
+  return new (mbuf->addr(offset)) envelope(type, msg_size);
+}
+
+__device__ void charm::send_remote_msg(envelope* env, size_t offset, int dst_pe) {
+  if (GID == 0) {
+    int src_pe = my_pe();
+
+    // Obtain a message index for the target PE and set signal to used
+    uint64_t* send_status = send_status_remote + REMOTE_MSG_MAX * dst_pe;
+    size_t msg_idx = nvshmem_uint64_wait_until_any(send_status, REMOTE_MSG_MAX,
+        nullptr, NVSHMEM_CMP_EQ, SIGNAL_FREE);
+    nvshmemx_signal_op(send_status + msg_idx, SIGNAL_USED, NVSHMEM_SIGNAL_SET, src_pe);
+
+    // Send composite
+    uint64_t* recv_comp = recv_comp_remote + REMOTE_MSG_MAX * src_pe;
+    composite_t src_composite(offset, env->size);
+    nvshmemx_signal_op(recv_comp + msg_idx, src_composite.data, NVSHMEM_SIGNAL_SET,
+        dst_pe);
+    PDEBUG("PE %d sending remote message: offset %llu, size %llu, dst PE %d, idx %llu\n",
+        src_pe, offset, env->size, dst_pe, msg_idx);
+
+#ifndef NO_CLEANUP
+    // Store source composite for later cleanup
+    uint64_t* send_comp = send_comp_remote + REMOTE_MSG_MAX * dst_pe;
+    send_comp[msg_idx] = src_composite.data;
+#endif
+  }
+  barrier_local();
+}
+
+__device__ void charm::send_reg_msg(int chare_id, int chare_idx, int ep_id,
+    void* buf, size_t payload_size, int dst_pe, int refnum) {
+  if (GID == 0) {
+    comm_module->env = (void*)create_envelope(msgtype::regular, payload_size,
+        comm_module->src_offset);
+
+    regular_msg* msg = new ((char*)comm_module->env + sizeof(envelope))
+      regular_msg(chare_id, chare_idx, ep_id, refnum);
+  }
+  barrier_local();
+
+  // Fill in payload (from regular GPU memory to NVSHMEM symmetric memory)
+  if (payload_size > 0 && BID == 0) {
+    void* dst_addr = (char*)comm_module->env + sizeof(envelope) + sizeof(regular_msg);
+#ifdef NVSHMEM_MEMCPY
+    nvshmem_memcpy_block(dst_addr, buf, payload_size);
+#else
+    memcpy_kernel_block(dst_addr, buf, payload_size);
+#endif
+  }
+  barrier_local();
+
+  // Send a message to dst PE
+  send_remote_msg((envelope*)comm_module->env, comm_module->src_offset, dst_pe);
+}
+
+__device__ void charm::send_begin_term_msg() {
+  // Don't do anything if message to begin termination
+  // has already been sent from this PE
+  if (comm_module->sent_term_flag) return;
+
+  if (GID == 0) {
+    comm_module->sent_term_flag = true;
+
+    int src_pe = my_pe();
+    comm_module->env = create_envelope(msgtype::begin_terminate, 0,
+        comm_module->src_offset);
+  }
+  barrier_local();
+
+  // Send message to PE 0
+  send_remote_msg((envelope*)comm_module->env, comm_module->src_offset, 0);
+}
+
+__device__ void charm::send_do_term_msg(int dst_pe) {
+  // Prepare message
+  if (GID == 0) {
+    comm_module->env = (void*)create_envelope(msgtype::do_terminate, 0,
+        comm_module->src_offset);
+  }
+  barrier_local();
+
+  // Send message
+  send_remote_msg((envelope*)comm_module->env, comm_module->src_offset,
+      dst_pe);
+}
+#endif // SM_LEVEL
 
 // Single-threaded
 __device__ void charm::revive_mismatches(int chare_id, int chare_idx, int refnum) {
   // Look for mismatches with the given chare index and refnum
+#ifdef SM_LEVEL
   chare_proxy_base*& chare_proxy = proxy_tables[blockIdx.x].proxies[chare_id];
+#else
+  chare_proxy_base*& chare_proxy = proxy_tables[0].proxies[chare_id];
+#endif
   mismatch_t* mismatches = chare_proxy->mismatches;
   for (int i = 0; i < MISMATCH_MAX; i++) {
     mismatch_t& mismatch = mismatches[i];
     if (mismatch.msg_idx != -1 && mismatch.chare_idx == chare_idx
         && mismatch.refnum == refnum) {
-      int msg_idx_global = LOCAL_MSG_MAX * c_n_sms * blockIdx.x + mismatch.msg_idx;
-      volatile atomic64_t* comp_addr = recv_comp_local + msg_idx_global;
       // Revive composite of mismatched message so that it can be processed
       // in the next scheduler loop
+#ifdef SM_LEVEL
+      int msg_idx_global = LOCAL_MSG_MAX * c_n_sms * blockIdx.x + mismatch.msg_idx;
+      volatile atomic64_t* comp_addr = recv_comp_local + msg_idx_global;
       atomicExch((atomic64_t*)comp_addr, (atomic64_t)mismatch.comp);
+#else
+      nvshmemx_signal_op(recv_comp_remote + mismatch.msg_idx, mismatch.comp,
+          NVSHMEM_SIGNAL_SET, my_pe());
+#endif
 
       // Clear mismatch
       mismatch.msg_idx = -1;
     }
   }
 }
+
+// TODO: User Message API
+/*
+__device__ void charm::message::alloc(int idx, int ep, size_t size) {
+  size_t msg_size = envelope::alloc_size(sizeof(regular_msg) + size);
+  env = create_envelope(msgtype::user, msg_size, &offset);
+}
+
+__device__ void charm::message::free() {}
+
+__device__ __forceinline__ void send_user_msg_common(int chare_id, int chare_idx,
+    int ep_id, const message& msg) {
+  envelope* env = msg.env;
+  if (threadIdx.x == 0) {
+    // Set regular message fields using placement new
+    new ((char*)env + sizeof(envelope)) regular_msg(chare_id, chare_idx, ep_id, -1);
+  }
+  __syncthreads();
+
+  //send_msg(env, msg.offset, msg.dst_pe);
+}
+
+__device__ void charm::send_user_msg(int chare_id, int chare_idx, int ep_id,
+    const message& msg) {
+  send_user_msg_common(chare_id, chare_idx, ep_id, msg);
+}
+
+__device__ void charm::send_user_msg(int chare_id, int chare_idx, int ep_id,
+    const message& msg, size_t payload_size) {
+  // Send size can be smaller than allocated message size
+  msg.env->size = envelope::alloc_size(msgtype::user, payload_size);
+
+  send_user_msg_common(chare_id, chare_idx, ep_id, msg);
+}
+*/

@@ -81,7 +81,7 @@ struct alignas(ALIGN_SIZE) envelope {
   }
 };
 
-// User Message API
+// TODO: User Message API
 struct alignas(ALIGN_SIZE) message {
   envelope* env;
   size_t offset;
@@ -96,19 +96,29 @@ struct alignas(ALIGN_SIZE) message {
 
 __device__ envelope* create_envelope(msgtype type, size_t payload_size,
     size_t& offset);
+#ifdef SM_LEVEL
 __device__ void send_local_msg(envelope* env, size_t offset, int dst_local_rank);
+__device__ void send_delegate_msg(request_msg* req);
+#endif
 __device__ void send_remote_msg(envelope* env, size_t offset, int dst_pe);
 __device__ void send_reg_msg(int chare_id, int chare_idx, int ep_id, void* buf,
     size_t payload_size, int dst_pe, int refnum);
-__device__ void send_delegate_msg(request_msg* req);
+__device__ void send_begin_term_msg();
+#ifdef SM_LEVEL
+__device__ void send_do_term_msg_ce(int dst_ce);
+__device__ void send_do_term_msg_pe(int dst_local_rank);
+#else
+__device__ void send_do_term_msg(int dst_pe);
+#endif
+__device__ void revive_mismatches(int chare_id, int chare_idx, int refnum);
+
+// TODO: User Message API
+/*
 __device__ void send_user_msg(int chare_id, int chare_idx, int ep_id,
     const message& msg);
 __device__ void send_user_msg(int chare_id, int chare_idx, int ep_id,
     const message& msg, size_t payload_size);
-__device__ void send_begin_term_msg();
-__device__ void send_do_term_msg_ce(int dst_ce);
-__device__ void send_do_term_msg_pe(int dst_local_rank);
-__device__ void revive_mismatches(int chare_id, int chare_idx, int refnum);
+*/
 
 }
 

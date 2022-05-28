@@ -3,13 +3,19 @@
 
 namespace charm {
 
-  __device__ __forceinline__ void memset_kernel(void* addr, int val, size_t size) {
+  __device__ __forceinline__ void memset_kernel_block(void* addr, int val, size_t size) {
     for (size_t i = threadIdx.x; i < size; i += blockDim.x) {
       ((char*)addr)[i] = (char)val;
     }
   }
 
-  __device__ __forceinline__ void memcpy_kernel(void* dst, void* src, size_t size) {
+  __device__ __forceinline__ void memset_kernel_grid(void* addr, int val, size_t size) {
+    for (size_t i = blockDim.x * blockIdx.x + threadIdx.x; i < size; i += gridDim.x * blockDim.x) {
+      ((char*)addr)[i] = (char)val;
+    }
+  }
+
+  __device__ __forceinline__ void memcpy_kernel_block(void* dst, void* src, size_t size) {
     for (size_t i = threadIdx.x; i < size; i += blockDim.x) {
       ((char*)dst)[i] = ((char*)src)[i];
     }

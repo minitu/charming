@@ -29,6 +29,14 @@ struct alignas(ALIGN_SIZE) comm {
 #ifdef SM_LEVEL
   int* child_local_ranks;
   int child_count;
+#else
+  // For communication between the leader TB and other TBs in the grid
+  size_t count;
+  void* env;
+  void* dst_addr;
+  size_t dst_offset;
+  void* src_addr;
+  size_t src_offset;
 #endif
 
   int local_start;

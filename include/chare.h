@@ -13,8 +13,10 @@
 // GPU constant memory
 extern __constant__ int c_n_pes;
 
+#ifdef SM_LEVEL
 // GPU shared memory
 extern __shared__ uint64_t s_mem[];
+#endif
 
 namespace charm {
 
@@ -23,13 +25,6 @@ struct chare {
   int n;
 
   __device__ chare() : i(-1), n(0) {}
-
-  // Packing/unpacking functions to be overloaded by the user
-  /*
-  __device__ size_t pack_size() { return 0; }
-  __device__ void pack(void* ptr) {}
-  __device__ void unpack(void* ptr) {}
-  */
 };
 
 template <class C>
@@ -93,7 +88,11 @@ struct chare_proxy : chare_proxy_base {
   __device__ chare_proxy()
     : chare_proxy_base(), objects(nullptr), entry_methods(nullptr) {
     // Store this proxy for the runtime
+#ifdef SM_LEVEL
     chare_proxy_table& my_proxy_table = proxy_tables[blockIdx.x];
+#else
+    chare_proxy_table& my_proxy_table = proxy_tables[0];
+#endif
     id = my_proxy_table.count++;
     assert(id < CHARE_TYPE_CNT_MAX);
     my_proxy_table.proxies[id] = this;
@@ -102,7 +101,7 @@ struct chare_proxy : chare_proxy_base {
     entry_methods = new entry_method_base<C>*[EM_CNT_MAX];
   }
 
-  // Add entry method to table
+  // Add entry method to table (single-threaded)
   template <void Func(C&, void*)>
   __device__ void add_entry_method() {
     entry_methods[em_count++] = new entry_method<C, Func>();
@@ -111,7 +110,11 @@ struct chare_proxy : chare_proxy_base {
   // Called on all TBs before main (single-threaded)
   __device__ void create(int n_chares, int* block_map) {
     int n_pes = c_n_pes;
+#ifdef SM_LEVEL
     int my_pe = s_mem[s_idx::my_pe];
+#else
+    int my_pe = c_my_dev;
+#endif
 
     // Allocate space for location map
     loc_map = new int[n_chares];
@@ -191,13 +194,6 @@ struct chare_proxy : chare_proxy_base {
     }
   }
 
-  inline __device__ void invoke(int idx, int ep, const message& msg) {
-    send_user_msg(id, idx, ep, msg);
-  }
-  inline __device__ void invoke(int idx, int ep, const message& msg, size_t size) {
-    send_user_msg(id, idx, ep, msg, size);
-  }
-
   // Single-threaded
   inline __device__ void set_refnum(int idx, int val) {
     assert(idx >= start_idx && idx <= end_idx);
@@ -207,11 +203,21 @@ struct chare_proxy : chare_proxy_base {
     revive_mismatches(id, idx, val);
   }
 
+  // TODO: User Message API
+  /*
+  inline __device__ void invoke(int idx, int ep, const message& msg) {
+    send_user_msg(id, idx, ep, msg);
+  }
+  inline __device__ void invoke(int idx, int ep, const message& msg, size_t size) {
+    send_user_msg(id, idx, ep, msg, size);
+  }
+
   inline __device__ void alloc_msg(message& msg, int idx, size_t size) {
     msg.dst_pe = loc_map[idx];
     msg.env = create_envelope(msgtype::user, size, msg.offset);
   }
-  inline __device__ void free_msg(message& msg) { /*TODO*/ }
+  inline __device__ void free_msg(message& msg) {}
+  */
 };
 
 } // namespace charm

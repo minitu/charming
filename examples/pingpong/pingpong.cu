@@ -1,11 +1,21 @@
 #include <stdio.h>
 #include "pingpong.h"
 
+#ifdef SM_LEVEL
+// SM-level scheduling
+#define GID (threadIdx.x)
+#define BARRIER_LOCAL __syncthreads()
 __shared__ charm::chare_proxy<Comm>* comm_proxy;
+#else
+// GPU-level scheduling
+#define GID (blockDim.x * blockIdx.x + threadIdx.x)
+#define BARRIER_LOCAL charm::barrier_local()
+__device__ charm::chare_proxy<Comm>* comm_proxy;
+#endif
 
 __device__ void charm::main(int argc, char** argv, size_t* argvs, int pe) {
   // Execute on all elements
-  if (threadIdx.x == 0) {
+  if (GID == 0) {
     // Create chare proxy and register entry methods
     comm_proxy = new charm::chare_proxy<Comm>();
     comm_proxy->add_entry_method<&entry_init>();
@@ -24,16 +34,24 @@ __device__ void charm::main(int argc, char** argv, size_t* argvs, int pe) {
     // Create chares
     comm_proxy->create(2, block_map);
   }
-  __syncthreads();
+  BARRIER_LOCAL;
 
   barrier();
 
   // Execute only on PE 0
   if (pe == 0) {
     constexpr int n_params = 4;
+#ifdef SM_LEVEL
     __shared__ size_t params[n_params];
+#else
+    size_t* params;
+#endif
 
-    if (threadIdx.x == 0) {
+    if (GID == 0) {
+#ifndef SM_LEVEL
+      params = new size_t[n_params];
+#endif
+
       // Default parameters
       params[0] = 1;
       params[1] = 1048576;
@@ -50,14 +68,14 @@ __device__ void charm::main(int argc, char** argv, size_t* argvs, int pe) {
       printf("Size: %llu - %llu\n", params[0], params[1]);
       printf("Iterations: %d (Warmup: %d)\n", (int)params[2], (int)params[3]);
     }
-    __syncthreads();
+    BARRIER_LOCAL;
 
     comm_proxy->invoke_all(0, params, sizeof(size_t) * n_params);
   }
 }
 
 __device__ void Comm::init(void* arg) {
-  if (threadIdx.x == 0) {
+  if (GID == 0) {
     size_t* params = (size_t*)arg;
     int param_idx = 0;
 
@@ -81,19 +99,19 @@ __device__ void Comm::init(void* arg) {
 #endif
     printf("Chare %d init on PE %d\n", index, charm::my_pe());
   }
-  __syncthreads();
+  BARRIER_LOCAL;
 
   comm_proxy->invoke(0, 1);
 }
 
 __device__ void Comm::init_done(void* arg) {
-  if (threadIdx.x == 0) {
+  if (GID == 0) {
     init_cnt++;
   }
-  __syncthreads();
+  BARRIER_LOCAL;
 
   if (init_cnt == 2) {
-    if (threadIdx.x == 0) {
+    if (GID == 0) {
       printf("Init done\n");
     }
     send();
@@ -103,7 +121,7 @@ __device__ void Comm::init_done(void* arg) {
 __device__ void Comm::send() {
   if (index == 0) {
     // Start iteration, only measure time on chare 0
-    if (threadIdx.x == 0) {
+    if (GID == 0) {
       if (iter == warmup) {
         start_tp = cuda::std::chrono::system_clock::now();
       }
@@ -116,14 +134,14 @@ __device__ void Comm::send() {
       }
 #endif
     }
-    __syncthreads();
+    BARRIER_LOCAL;
 #ifdef USER_MSG
     comm_proxy->invoke(peer, 2, msg, cur_size);
 #else
     comm_proxy->invoke(peer, 2, data, cur_size);
 #endif
 #ifdef MEASURE_INVOKE
-    if (threadIdx.x == 0) {
+    if (GID == 0) {
       if (iter >= warmup) {
         invoke_end_tp = cuda::std::chrono::system_clock::now();
         cuda::std::chrono::duration<double> diff = invoke_end_tp - invoke_start_tp;
@@ -134,39 +152,41 @@ __device__ void Comm::send() {
         invoke_time = 0;
       }
     }
-    __syncthreads();
+    BARRIER_LOCAL;
 #endif
   } else {
     // End iteration
 #ifdef DEBUG
-    if (threadIdx.x == 0) {
+    if (GID == 0) {
       printf("Index %d iter %d sending size %lu\n", index, iter, cur_size);
     }
-    __syncthreads();
+    BARRIER_LOCAL;
 #endif
 #ifdef USER_MSG
     comm_proxy->invoke(peer, 2, msg, cur_size);
 #else
     comm_proxy->invoke(peer, 2, data, cur_size);
 #endif
-    if (threadIdx.x == 0) {
+    if (GID == 0) {
       if (++iter == n_iters + warmup) {
         cur_size *= 2;
         iter = 0;
       }
     }
-    __syncthreads();
+    BARRIER_LOCAL;
   }
 }
 
 __device__ void Comm::recv(void* arg) {
+#ifdef SM_LEVEL
   __shared__ bool end;
-  if (threadIdx.x == 0) {
+#endif
+  if (GID == 0) {
     end = false;
   }
-  __syncthreads();
+  BARRIER_LOCAL;
 
-  if (threadIdx.x == 0) {
+  if (GID == 0) {
     if (index == 0) {
 #ifdef DEBUG
       printf("Index %d iter %d received size %lu\n", index, iter, cur_size);
@@ -187,7 +207,7 @@ __device__ void Comm::recv(void* arg) {
 #endif
     }
   }
-  __syncthreads();
+  BARRIER_LOCAL;
 
   if (end) {
     charm::end();

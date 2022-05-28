@@ -83,6 +83,9 @@ __device__ __forceinline__ int get_ce_from_pe(int pe) {
   int rank_in_cluster = get_local_rank_from_pe(pe) % c_cluster_size;
   return (start_ce + (rank_in_cluster % c_n_ces_cluster));
 }
+#else
+#define GID (blockDim.x * blockIdx.x + threadIdx.x)
+#define BID (blockIdx.x)
 #endif // SM_LEVEL
 
 #endif // _COMMON_H_

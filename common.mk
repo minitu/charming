@@ -8,4 +8,4 @@ CHARMING_PREFIX ?= $(HOME)/work/charming/install
 
 NVCC = nvcc
 ARCH = -arch=sm_70
-OPTS = #-DNO_CLEANUP -DDEBUG
+OPTS = #-DSM_LEVEL -DNO_CLEANUP -DDEBUG

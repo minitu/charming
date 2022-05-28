@@ -22,6 +22,7 @@ __device__ int n_nodes();
 
 // Element-level barrier (requires all PEs and CEs to participate)
 __device__ void barrier();
+__device__ void barrier_local();
 
 __device__ int device_atoi(const char* str, int strlen);
 

@@ -16,6 +16,7 @@ using namespace charm;
 // GPU global memory
 extern __device__ __managed__ chare_proxy_table* proxy_tables;
 
+#ifdef SM_LEVEL
 // GPU shared memory
 extern __shared__ uint64_t s_mem[];
 
@@ -161,7 +162,6 @@ __device__ bool charm::process_msg_ce(void* addr, size_t offset, msgtype& type,
   return true;
 }
 
-
 __device__ __forceinline__ void loop_pe(comm* c) {
   c->process_local();
 #ifndef NO_CLEANUP
@@ -233,6 +233,105 @@ __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
   }
 }
 
+#else
+// GPU global memory
+extern __device__ comm* comm_module;
+
+__device__ bool charm::process_msg(void* addr, size_t offset, msgtype& type,
+    bool& begin_term_flag, bool& do_term_flag) {
+  int pe = my_pe();
+  envelope* env = (envelope*)addr;
+  type = env->type;
+  if (GID == 0) {
+    PDEBUG("PE %d processing msg type %d size %llu\n", pe, type, env->size);
+  }
+
+  chare_proxy_table& my_proxy_table = proxy_tables[0];
+
+  if (type == msgtype::regular || type == msgtype::user) {
+    // Regular message (including user message)
+    regular_msg* msg = (regular_msg*)((char*)env + sizeof(envelope));
+    if (GID == 0) {
+      PDEBUG("PE %d regular msg chare ID %d chare idx %d EP ID %d refnum %d\n",
+          pe, msg->chare_id, msg->chare_idx, msg->ep_id, msg->refnum);
+    }
+
+    chare_proxy_base*& chare_proxy = my_proxy_table.proxies[msg->chare_id];
+    void* payload = (char*)msg + sizeof(regular_msg);
+
+    return chare_proxy->call(msg->chare_idx, msg->ep_id, payload, msg->refnum);
+
+  } else if (type == msgtype::begin_terminate) {
+    // Received begin termination message
+    // Should only be received by PE 0
+    assert(pe == 0);
+
+    // Check if begin_terminate msg was already received
+    if (begin_term_flag) return true;
+
+    if (GID == 0) {
+      // Send out do_terminate messages to all PEs
+      PDEBUG("PE %d begin terminate msg\n", pe);
+      begin_term_flag = true;
+    }
+    barrier_local();
+
+    for (int pe = 0; pe < c_n_pes; pe++) {
+      send_do_term_msg(pe);
+    }
+
+  } else if (type == msgtype::do_terminate) {
+    // Received message to terminate
+    if (GID == 0) {
+      PDEBUG("PE %d do terminate msg\n", pe);
+      do_term_flag = true;
+    }
+    barrier_local();
+
+  } else {
+    if (GID == 0) {
+      PERROR("PE %d unrecognized message type %d\n", pe, type);
+    }
+    assert(false);
+  }
+
+  return true;
+}
+
+__device__ __forceinline__ void loop() {
+  comm_module->process_remote();
+  comm_module->cleanup_remote();
+  comm_module->cleanup_heap();
+}
+
+__global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {
+  cg::grid_group grid = cg::this_grid();
+  int gid = blockDim.x * blockIdx.x + threadIdx.x;
+  if (gid == 0) {
+    comm_module = new comm;
+    comm_module->init();
+  }
+
+  scheduler_barrier();
+
+  // Execute user's main function on all PEs
+  main(argc, argv, argvs, my_pe());
+
+  scheduler_barrier();
+
+  // Loop until termination
+  do {
+    loop();
+  } while (!comm_module->do_term_flag);
+
+  scheduler_barrier();
+
+  if (gid == 0) {
+    PDEBUG("PE %d terminating...\n", my_pe());
+  }
+}
+#endif // SM_LEVEL
+
 __device__ void charm::scheduler_barrier() {
   // For grid synchronization
   cg::grid_group grid = cg::this_grid();
@@ -241,5 +340,10 @@ __device__ void charm::scheduler_barrier() {
   if (gid == 0) {
     nvshmem_barrier_all();
   }
+  grid.sync();
+}
+
+__device__ void charm::scheduler_barrier_local() {
+  cg::grid_group grid = cg::this_grid();
   grid.sync();
 }

@@ -20,6 +20,9 @@ struct Comm : charm::chare {
 #else
   char* data;
 #endif
+#ifndef SM_LEVEL
+  bool end;
+#endif
 
   cuda::std::chrono::time_point<cuda::std::chrono::system_clock> start_tp;
   cuda::std::chrono::time_point<cuda::std::chrono::system_clock> end_tp;

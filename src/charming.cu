@@ -32,6 +32,7 @@ __constant__ int c_n_pes_node;
 __constant__ int c_n_nodes;
 
 #ifdef SM_LEVEL
+// GPU constant memory
 __constant__ int c_n_clusters_dev;
 __constant__ int c_cluster_size;
 __constant__ int c_n_pes_cluster;
@@ -262,6 +263,7 @@ __device__ void charm::end() {
   send_begin_term_msg();
 }
 
+#ifdef SM_LEVEL
 __device__ void charm::abort() {
   // Abort currently running PE
   if (threadIdx.x == 0) {
@@ -270,6 +272,7 @@ __device__ void charm::abort() {
   }
   __syncthreads();
 }
+#endif
 
 __device__ int charm::my_pe() {
 #ifdef SM_LEVEL
@@ -283,6 +286,7 @@ __device__ int charm::n_pes_node() { return c_n_pes_node; }
 __device__ int charm::n_nodes() { return c_n_nodes; }
 
 __device__ void charm::barrier() { scheduler_barrier(); }
+__device__ void charm::barrier_local() { scheduler_barrier_local(); }
 
 __device__ int charm::device_atoi(const char* str, int strlen) {
   int tmp = 0;
