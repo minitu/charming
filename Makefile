@@ -35,7 +35,7 @@ else
 INC += -Isrc/comm/put
 endif
 
-NVCC_CU_OPTS = --std=c++11 -dc $(ARCH) $(DEFS) -DCHARMING_COMM_TYPE=$(CHARMING_COMM_TYPE) -I$(NVSHMEM_PREFIX)/include
+NVCC_CU_OPTS = --std=c++11 -dc $(ARCH) $(OPTS) -DCHARMING_COMM_TYPE=$(CHARMING_COMM_TYPE) -I$(NVSHMEM_PREFIX)/include
 ifeq ($(CHARMING_USE_MPI), 1)
 NVCC_CU_OPTS += -I$(MPI_ROOT)/include -DCHARMING_USE_MPI
 endif
