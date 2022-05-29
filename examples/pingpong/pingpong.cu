@@ -13,6 +13,8 @@ __shared__ charm::chare_proxy<Comm>* comm_proxy;
 __device__ charm::chare_proxy<Comm>* comm_proxy;
 #endif
 
+__device__ size_t* params;
+
 __device__ void charm::main(int argc, char** argv, size_t* argvs, int pe) {
   // Execute on all elements
   if (GID == 0) {
@@ -43,8 +45,6 @@ __device__ void charm::main(int argc, char** argv, size_t* argvs, int pe) {
     constexpr int n_params = 4;
 #ifdef SM_LEVEL
     __shared__ size_t params[n_params];
-#else
-    size_t* params;
 #endif
 
     if (GID == 0) {
@@ -65,6 +65,7 @@ __device__ void charm::main(int argc, char** argv, size_t* argvs, int pe) {
       if (argc >= 5) params[3] = charm::device_atoi(argv[4], argvs[4]);
 
       printf("Pingpong\n");
+      printf("PEs: %d\n", charm::n_pes());
       printf("Size: %llu - %llu\n", params[0], params[1]);
       printf("Iterations: %d (Warmup: %d)\n", (int)params[2], (int)params[3]);
     }

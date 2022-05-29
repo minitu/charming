@@ -566,6 +566,7 @@ __device__ void charm::comm::process_remote() {
         bool success = dst_mbuf->acquire(msg_size, dst_offset);
         if (!success) {
           PERROR("CE %d: Not enough space in message buffer\n", dst_ce);
+          dst_mbuf->print();
           assert(false);
         }
         PDEBUG("CE %d acquired space for incoming remote message: offset %llu, size %llu\n",
@@ -1027,6 +1028,7 @@ __device__ void charm::comm::process_remote() {
         bool success = mbuf->acquire(msg_size, dst_offset);
         if (!success) {
           PERROR("PE %d: Not enough space in message buffer\n", dst_pe);
+          mbuf->print();
           assert(false);
         }
         PDEBUG("PE %d acquired space for incoming remote message: offset %llu, size %llu\n",
@@ -1215,15 +1217,14 @@ __device__ void charm::send_reg_msg(int chare_id, int chare_idx, int ep_id,
   barrier_local();
 
   // Fill in payload (from regular GPU memory to NVSHMEM symmetric memory)
-  if (payload_size > 0 && BID == 0) {
+  if (payload_size > 0) {
     void* dst_addr = (char*)comm_module->env + sizeof(envelope) + sizeof(regular_msg);
 #ifdef NVSHMEM_MEMCPY
-    nvshmem_memcpy_block(dst_addr, buf, payload_size);
+    nvshmem_memcpy_grid(dst_addr, buf, payload_size);
 #else
-    memcpy_kernel_block(dst_addr, buf, payload_size);
+    memcpy_kernel_grid(dst_addr, buf, payload_size);
 #endif
   }
-  barrier_local();
 
   // Send a message to dst PE
   send_remote_msg((envelope*)comm_module->env, comm_module->src_offset, dst_pe);
