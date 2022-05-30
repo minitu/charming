@@ -20,6 +20,10 @@ struct Block : charm::chare {
   int mype;
   int recv_count;
   int term_count;
+#ifndef SM_LEVEL
+  bool done;
+  bool end;
+#endif
 
   real* a;
   real* a_new;

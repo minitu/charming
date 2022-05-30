@@ -7,7 +7,20 @@
 #define GRID_HEIGHT 16384
 #define N_ITERS 1000
 
+#ifdef SM_LEVEL
+// SM-level scheduling
+#define GID (threadIdx.x)
+#define GROUP_SIZE (blockDim.x)
+#define BARRIER_LOCAL __syncthreads()
 __shared__ charm::chare_proxy<Block>* block_proxy;
+#else
+// GPU-level scheduling
+#define GID (blockDim.x * blockIdx.x + threadIdx.x)
+#define GROUP_SIZE (gridDim.x * blockDim.x)
+#define BARRIER_LOCAL charm::barrier_local()
+__device__ charm::chare_proxy<Block>* block_proxy;
+__device__ int* params;
+#endif
 
 __device__ void charm::main(int argc, char** argv, size_t* argvs, int pe) {
   // Execute on all elements
@@ -22,7 +35,7 @@ __device__ void charm::main(int argc, char** argv, size_t* argvs, int pe) {
   if (argc >= 4) grid_height = charm::device_atoi(argv[3], argvs[3]);
   if (argc >= 5) n_iters = charm::device_atoi(argv[4], argvs[4]);
 
-  if (threadIdx.x == 0) {
+  if (GID == 0) {
     // Create chare proxy and register entry methods
     block_proxy = new charm::chare_proxy<Block>();
     block_proxy->add_entry_method<&entry_init>();
@@ -32,16 +45,22 @@ __device__ void charm::main(int argc, char** argv, size_t* argvs, int pe) {
     // Create chares
     block_proxy->create(n_chares);
   }
-  __syncthreads();
+  BARRIER_LOCAL;
 
   barrier();
 
   // Executed only on PE 0
   if (pe == 0) {
     constexpr int n_params = 3;
+#ifdef SM_LEVEL
     __shared__ int params[n_params];
+#endif
 
-    if (threadIdx.x == 0) {
+    if (GID == 0) {
+#ifndef SM_LEVEL
+      params = new int[n_params];
+#endif
+
       params[0] = grid_width;
       params[1] = grid_height;
       params[2] = n_iters;
@@ -50,7 +69,7 @@ __device__ void charm::main(int argc, char** argv, size_t* argvs, int pe) {
       printf("Grid size: %d x %d\n", grid_width, grid_height);
       printf("Iterations: %d\n", n_iters);
     }
-    __syncthreads();
+    BARRIER_LOCAL;
 
     block_proxy->invoke_all(0, params, sizeof(int) * n_params);
   }
@@ -65,7 +84,7 @@ __device__ void jacobi_kernel(real* __restrict__ const a_new, const real* __rest
 
 // Entry methods
 __device__ void Block::init(void* arg) {
-  if (threadIdx.x == 0) {
+  if (GID == 0) {
     int* params = (int*)arg;
     nx = params[0];
     ny = params[1];
@@ -113,10 +132,15 @@ __device__ void Block::init(void* arg) {
     // Set initial reference number
     block_proxy->set_refnum(mype, iter);
   }
-  __syncthreads();
+  BARRIER_LOCAL;
 
-  charm::memset_kernel(a, 0, nx * (chunk_size + 2) * sizeof(real));
-  charm::memset_kernel(a_new, 0, nx * (chunk_size + 2) * sizeof(real));
+#ifdef SM_LEVEL
+  charm::memset_kernel_block(a, 0, nx * (chunk_size + 2) * sizeof(real));
+  charm::memset_kernel_block(a_new, 0, nx * (chunk_size + 2) * sizeof(real));
+#else
+  charm::memset_kernel_grid(a, 0, nx * (chunk_size + 2) * sizeof(real));
+  charm::memset_kernel_grid(a_new, 0, nx * (chunk_size + 2) * sizeof(real));
+#endif
 
   initialize_boundaries(a_new, a, PI, iy_start_global - 1, nx, chunk_size, ny - 2);
 
@@ -139,10 +163,12 @@ __device__ void Block::send_halo() {
 
 __device__ void Block::recv_halo(void* arg) {
   // TODO: Figure out if halo came from the top or bottom neighbor & memcpy
+#ifdef SM_LEVEL
   __shared__ bool done;
   __shared__ bool end;
+#endif
 
-  if (threadIdx.x == 0) {
+  if (GID == 0) {
     done = false;
     end = false;
 
@@ -161,7 +187,7 @@ __device__ void Block::recv_halo(void* arg) {
       }
     }
   }
-  __syncthreads();
+  BARRIER_LOCAL;
 
   if (done) {
     if (end) {
@@ -174,10 +200,10 @@ __device__ void Block::recv_halo(void* arg) {
 
 __device__ void Block::terminate(void* arg) {
   // Terminate only when all chares have finished
-  if (threadIdx.x == 0) {
+  if (GID == 0) {
     term_count++;
   }
-  __syncthreads();
+  BARRIER_LOCAL;
 
   if (term_count == npes) {
     charm::end();
@@ -187,7 +213,7 @@ __device__ void Block::terminate(void* arg) {
 __device__ void initialize_boundaries(real* __restrict__ const a_new, real* __restrict__ const a,
                                       const real pi, const int offset, const int nx,
                                       const int my_ny, int ny) {
-  for (int iy = threadIdx.x; iy < my_ny; iy += blockDim.x) {
+  for (int iy = GID; iy < my_ny; iy += GROUP_SIZE) {
     const real y0 = sin(2.0 * pi * (offset + iy) / (ny - 1));
     a[(iy + 1) * nx + 0] = y0;
     a[(iy + 1) * nx + (nx - 1)] = y0;
@@ -199,7 +225,7 @@ __device__ void initialize_boundaries(real* __restrict__ const a_new, real* __re
 __device__ void jacobi_kernel(real* __restrict__ const a_new, const real* __restrict__ const a,
                               const int iy_start, const int iy_end, const int nx) {
   for (int iy = iy_start; iy < iy_end; iy++) {
-    for (int ix = threadIdx.x + 1; ix < (nx - 1); ix += blockDim.x) {
+    for (int ix = GID + 1; ix < (nx - 1); ix += GROUP_SIZE) {
       const real new_val = 0.25 * (a[iy * nx + ix + 1] + a[iy * nx + ix - 1] +
                                    a[(iy + 1) * nx + ix] + a[(iy - 1) * nx + ix]);
       a_new[iy * nx + ix] = new_val;

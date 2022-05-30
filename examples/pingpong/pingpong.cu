@@ -11,9 +11,8 @@ __shared__ charm::chare_proxy<Comm>* comm_proxy;
 #define GID (blockDim.x * blockIdx.x + threadIdx.x)
 #define BARRIER_LOCAL charm::barrier_local()
 __device__ charm::chare_proxy<Comm>* comm_proxy;
-#endif
-
 __device__ size_t* params;
+#endif
 
 __device__ void charm::main(int argc, char** argv, size_t* argvs, int pe) {
   // Execute on all elements
