@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <assert.h>
 #include "heap.h"
 
 __device__ __forceinline__ void swap(composite_t* x, composite_t* y) {
@@ -7,8 +8,8 @@ __device__ __forceinline__ void swap(composite_t* x, composite_t* y) {
   *y = tmp;
 }
 
-__device__ int min_heap::push(const composite_t& key) {
-  if (size >= max_size) return -1;
+__device__ void min_heap::push(const composite_t& key) {
+  assert(size < max_size);
 
   // Insert key at the end and heapify bottom-up
   buf[size] = key;
@@ -22,8 +23,6 @@ __device__ int min_heap::push(const composite_t& key) {
     cur = parent(cur);
   }
   size++;
-
-  return 0;
 }
 
 __device__ composite_t min_heap::top() {
