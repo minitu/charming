@@ -379,31 +379,31 @@ __device__ void charm::comm::process_local() {
 
   // Look for valid message addresses
   volatile atomic64_t* recv_comp = recv_comp_local + LOCAL_MSG_MAX * c_n_sms * dst_local_rank;
-  int msg_idx;
+  int found_idx;
 #ifdef FIND_MSG_BLOCK
-  atomic64_t data = find_msg_block(recv_comp, local_start, msg_idx);
+  atomic64_t data = find_msg_block(recv_comp, local_start, found_idx);
   composite_t comp(data);
 #else
   if (threadIdx.x == 0) {
-    atomic64_t data = find_msg_single(recv_comp, local_start, msg_idx);
+    atomic64_t data = find_msg_single(recv_comp, local_start, found_idx);
     s_mem[s_idx::dst] = (uint64_t)data;
-    s_mem[s_idx::src] = (uint64_t)msg_idx;
+    s_mem[s_idx::src] = (uint64_t)found_idx;
   }
   __syncthreads();
   composite_t comp(s_mem[s_idx::dst]);
-  msg_idx = (int)s_mem[s_idx::src];
+  found_idx = (int)s_mem[s_idx::src];
 #endif
 
   if (comp.data) {
-    int src_local_rank = msg_idx / LOCAL_MSG_MAX;
-    int clup_idx = msg_idx % LOCAL_MSG_MAX;
+    int src_local_rank = found_idx / LOCAL_MSG_MAX;
+    int msg_idx = found_idx % LOCAL_MSG_MAX;
     ringbuf_t* dst_mbuf = mbuf + dst_local_rank;
     envelope* env = (envelope*)dst_mbuf->addr(comp.offset());
     if (threadIdx.x == 0) {
       PDEBUG("%s %d receiving local message (env %p, msgtype %d, size %llu) "
           "from local rank %d at index %d\n",
           is_pe ? "PE" : "CE", dst_elem, env, env->type, env->size,
-          src_local_rank, clup_idx);
+          src_local_rank, msg_idx);
     }
     __syncthreads();
 
@@ -416,7 +416,7 @@ __device__ void charm::comm::process_local() {
 
     if (threadIdx.x == 0) {
       // Clean up received composite
-      atomicExch((atomic64_t*)&recv_comp[msg_idx], 0);
+      atomicExch((atomic64_t*)&recv_comp[found_idx], 0);
 
       if (!success) {
         // Reference number matching failed
@@ -427,7 +427,7 @@ __device__ void charm::comm::process_local() {
         int mismatch_idx = -1;
         // Look for a free mismatch_t
         for (int i = 0; i < MISMATCH_MAX; i++) {
-          if (mismatches[i].msg_idx == -1) {
+          if (mismatches[i].found_idx == -1) {
             mismatch_idx = i;
             break;
           }
@@ -437,7 +437,7 @@ __device__ void charm::comm::process_local() {
           assert(false);
         }
         mismatch_t& mismatch = mismatches[mismatch_idx];
-        mismatch.msg_idx = msg_idx;
+        mismatch.found_idx = found_idx;
         mismatch.comp = comp.data;
         mismatch.chare_idx = msg->chare_idx;
         mismatch.refnum = msg->refnum;
@@ -446,7 +446,7 @@ __device__ void charm::comm::process_local() {
         PDEBUG("%s %d process_local signal cleanup (env %p, msgtype %d, size %llu) "
             "to local rank %d at index %d\n",
             is_pe ? "PE" : "CE", dst_elem, env, env->type, env->size,
-            src_local_rank, clup_idx);
+            src_local_rank, msg_idx);
 
         volatile int* src_send_status = send_status_local
           + LOCAL_MSG_MAX * c_n_sms * src_local_rank + LOCAL_MSG_MAX * dst_local_rank;
@@ -455,7 +455,7 @@ __device__ void charm::comm::process_local() {
 #else
         int signal = SIGNAL_FREE;
 #endif
-        int ret = atomicCAS((int*)&src_send_status[clup_idx], SIGNAL_USED, signal);
+        int ret = atomicCAS((int*)&src_send_status[msg_idx], SIGNAL_USED, signal);
         assert(ret == SIGNAL_USED);
       }
     }
@@ -1050,24 +1050,34 @@ __device__ void charm::comm::process_remote() {
       bool success = process_msg(dst_addr, dst_offset, type, begin_term_flag,
           do_term_flag);
 
-      if (success && GID == 0) {
+      if (GID == 0) {
         // Clear message request
         // FIXME: Need fence after?
         nvshmemx_signal_op(recv_comp + found_idx, SIGNAL_FREE, NVSHMEM_SIGNAL_SET,
             dst_pe);
 
+        composite_t dst_composite(dst_offset, msg_size);
+        if (!success) {
+          // TODO: Mismatch mechanism
+        } else {
+#ifndef NO_CLEANUP
+          // Store composite to be cleared from memory
+          addr_heap.push(dst_composite);
+          PDEBUG("PE %d process_remote push to heap: "
+              "offset %llu, size %llu, src PE %d, idx %llu\n", dst_pe,
+              dst_composite.offset(), dst_composite.size(), src_pe, msg_idx);
+#endif
+        }
+
+        // Notify sender that message has been delivered
         uint64_t* src_send_status = send_status_remote + REMOTE_MSG_MAX * dst_pe;
         int signal = SIGNAL_FREE;
 #ifndef NO_CLEANUP
-        // Store composite to be cleared from memory
-        composite_t dst_composite(dst_offset, msg_size);
-        addr_heap.push(dst_composite);
         signal = (type == msgtype::user) ? SIGNAL_FREE : SIGNAL_CLUP;
-        PDEBUG("PE %d process_remote signal cleanup & push to heap: signal %d, "
+#endif
+        PDEBUG("PE %d process_remote signal cleanup: signal %d, "
             "offset %llu, size %llu, src PE %d, idx %llu\n", dst_pe, signal,
             dst_composite.offset(), dst_composite.size(), src_pe, msg_idx);
-#endif
-        // Notify sender that message has been delivered
         nvshmemx_signal_op(src_send_status + msg_idx, signal, NVSHMEM_SIGNAL_SET,
             src_pe);
       }
@@ -1273,21 +1283,23 @@ __device__ void charm::revive_mismatches(int chare_id, int chare_idx, int refnum
   mismatch_t* mismatches = chare_proxy->mismatches;
   for (int i = 0; i < MISMATCH_MAX; i++) {
     mismatch_t& mismatch = mismatches[i];
-    if (mismatch.msg_idx != -1 && mismatch.chare_idx == chare_idx
+    if (mismatch.found_idx != -1 && mismatch.chare_idx == chare_idx
         && mismatch.refnum == refnum) {
       // Revive composite of mismatched message so that it can be processed
       // in the next scheduler loop
 #ifdef SM_LEVEL
-      int msg_idx_global = LOCAL_MSG_MAX * c_n_sms * blockIdx.x + mismatch.msg_idx;
-      volatile atomic64_t* comp_addr = recv_comp_local + msg_idx_global;
+      int found_idx_global = LOCAL_MSG_MAX * c_n_sms * blockIdx.x + mismatch.found_idx;
+      volatile atomic64_t* comp_addr = recv_comp_local + found_idx_global;
       atomicExch((atomic64_t*)comp_addr, (atomic64_t)mismatch.comp);
 #else
-      nvshmemx_signal_op(recv_comp_remote + mismatch.msg_idx, mismatch.comp,
+      PDEBUG("PE %d reviving mismatch for chare array ID %d idx %d found_idx %d refnum %d\n",
+          c_my_dev, chare_id, chare_idx, mismatch.found_idx, refnum);
+      nvshmemx_signal_op(recv_comp_remote + mismatch.found_idx, mismatch.comp,
           NVSHMEM_SIGNAL_SET, my_pe());
 #endif
 
       // Clear mismatch
-      mismatch.msg_idx = -1;
+      mismatch.found_idx = -1;
     }
   }
 }

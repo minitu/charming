@@ -38,12 +38,12 @@ struct entry_method : entry_method_base<C> {
 };
 
 struct mismatch_t {
-  int msg_idx;
+  int found_idx;
   uint64_t comp;
   int chare_idx;
   int refnum;
 
-  __device__ mismatch_t() : msg_idx(-1) {}
+  __device__ mismatch_t() : found_idx(-1) {}
 };
 
 struct chare_proxy_base {
@@ -200,7 +200,11 @@ struct chare_proxy : chare_proxy_base {
     int local_idx = idx - start_idx;
     refnum[local_idx] = val;
 
+#ifdef SM_LEVEL
     revive_mismatches(id, idx, val);
+#else
+    // TODO
+#endif
   }
 
   // TODO: User Message API
