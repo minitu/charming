@@ -27,6 +27,10 @@ struct Block : charm::chare {
 
   real* a;
   real* a_new;
+  size_t a_size;
+  size_t a_new_size;
+  size_t a_offset;
+  size_t a_new_offset;
 
   int chunk_size;
 
@@ -44,15 +48,18 @@ struct Block : charm::chare {
 
   __device__ Block() {}
   __device__ void init(void* arg);
-  __device__ void update();
-  __device__ void send_halo();
-  __device__ void recv_halo(void* arg);
-  __device__ void terminate(void* arg);
+  __device__ void iterate();
+  //__device__ void update();
+  //__device__ void send_halo();
+  //__device__ void recv_halo(void* arg);
+  //__device__ void terminate(void* arg);
 };
 
 // Entry methods
 __device__ void entry_init(Block& c, void* arg) { c.init(arg); }
+/*
 __device__ void entry_recv_halo(Block& c, void* arg) { c.recv_halo(arg); }
 __device__ void entry_terminate(Block& c, void* arg) { c.terminate(arg); }
+*/
 
 #endif

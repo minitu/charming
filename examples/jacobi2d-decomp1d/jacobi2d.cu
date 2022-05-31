@@ -39,8 +39,10 @@ __device__ void charm::main(int argc, char** argv, size_t* argvs, int pe) {
     // Create chare proxy and register entry methods
     block_proxy = new charm::chare_proxy<Block>();
     block_proxy->add_entry_method<&entry_init>();
+    /*
     block_proxy->add_entry_method<&entry_recv_halo>();
     block_proxy->add_entry_method<&entry_terminate>();
+    */
 
     // Create chares
     block_proxy->create(n_chares);
@@ -105,8 +107,9 @@ __device__ void Block::init(void* arg) {
     else
         chunk_size = chunk_size_high;
 
-    a = (real*)malloc(nx * (chunk_size_high + 2) * sizeof(real));
-    a_new = (real*)malloc(nx * (chunk_size_high + 2) * sizeof(real));
+    a_size = a_new_size = nx * (chunk_size_high + 2) * sizeof(real);
+    a = (real*)charm::malloc_user(a_size, a_offset);
+    a_new = (real*)charm::malloc_user(a_new_size, a_new_offset);
     assert(a && a_new);
 
     // Calculate local domain boundaries
@@ -130,7 +133,7 @@ __device__ void Block::init(void* arg) {
     iy_start_bottom = 0;
 
     // Set initial reference number
-    block_proxy->set_refnum(mype, iter);
+    //block_proxy->set_refnum(mype, iter);
   }
   BARRIER_LOCAL;
 
@@ -144,10 +147,27 @@ __device__ void Block::init(void* arg) {
 
   initialize_boundaries(a_new, a, PI, iy_start_global - 1, nx, chunk_size, ny - 2);
 
-  // Start with Jacobi update
-  update();
+  // Start iteration
+  iterate();
 }
 
+__device__ void Block::iterate() {
+  for (; iter < iter_max; iter++) {
+    // Execute Jacobi update kernel
+    jacobi_kernel(a_new, a, iy_start, iy_end, nx);
+
+    // Swap pointers
+    real* temp = a;
+    a = a_new;
+    a_new = temp;
+  }
+
+  if (GID == 0) {
+    printf("Block %d completed %d iterations\n", mype, iter_max);
+  }
+}
+
+/*
 __device__ void Block::update() {
   // Execute Jacobi update kernel
   jacobi_kernel(a_new, a, iy_start, iy_end, nx);
@@ -174,6 +194,7 @@ __device__ void Block::recv_halo(void* arg) {
 
     if (++recv_count == 2) {
       // Received halos from both neighbors
+      printf("Chare %3d completed iteration %d\n", mype, iter);
       recv_count = 0;
       done = true;
 
@@ -183,7 +204,7 @@ __device__ void Block::recv_halo(void* arg) {
 
       if (iter == iter_max) {
         end = true;
-        printf("Chare %3d completed %d iterations\n", mype, iter_max);
+        printf("Chare %3d completed all %d iterations\n", mype, iter_max);
       }
     }
   }
@@ -209,6 +230,7 @@ __device__ void Block::terminate(void* arg) {
     charm::end();
   }
 }
+*/
 
 __device__ void initialize_boundaries(real* __restrict__ const a_new, real* __restrict__ const a,
                                       const real pi, const int offset, const int nx,
