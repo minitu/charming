@@ -51,6 +51,11 @@ struct alignas(ALIGN_SIZE) comm {
   __device__ void cleanup_heap();
 };
 
-}
+#ifndef SM_LEVEL
+__device__ void* malloc_user(size_t size, size_t& offset);
+__device__ void free_user(size_t size, size_t offset);
+#endif
+
+} // namespace charm
 
 #endif // _COMM_H_

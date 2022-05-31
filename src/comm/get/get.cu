@@ -1304,6 +1304,24 @@ __device__ void charm::revive_mismatches(int chare_id, int chare_idx, int refnum
   }
 }
 
+#ifndef SM_LEVEL
+__device__ void* charm::malloc_user(size_t size, size_t& offset) {
+  bool success = mbuf->acquire(size, offset);
+  if (!success) {
+    PERROR("PE %d: Not enough space in message buffer\n", c_my_dev);
+    mbuf->print();
+    return nullptr;
+  }
+  PDEBUG("PE %d: malloc_user offset %llu size %d\n", c_my_dev, offset, size);
+  return mbuf->addr(offset);
+}
+
+__device__ void charm::free_user(size_t size, size_t offset) {
+  composite_t comp(offset, size);
+  comm_module->addr_heap.push(comp);
+}
+#endif
+
 // TODO: User Message API
 /*
 __device__ void charm::message::alloc(int idx, int ep, size_t size) {

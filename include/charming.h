@@ -26,6 +26,11 @@ __device__ void barrier_local();
 
 __device__ int device_atoi(const char* str, int strlen);
 
+#ifndef SM_LEVEL
+__device__ void* malloc_user(size_t size, size_t& offset);
+__device__ void free_user(size_t size, size_t offset);
+#endif
+
 }
 
 #endif // _CHARMING_H_
