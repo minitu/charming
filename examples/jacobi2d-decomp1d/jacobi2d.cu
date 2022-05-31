@@ -133,7 +133,7 @@ __device__ void Block::init(void* arg) {
     mype = charm::chare::i;
     recv_count = 0;
     term_count = 0;
-    printf("Block %3d init\n", mype);
+    printf("Block %3d init on PE %d\n", mype, charm::my_pe());
 
     // Compute chunk size and allocate memory
     int chunk_size_low = (ny - 2) / npes;
@@ -211,7 +211,6 @@ __device__ void Block::iterate() {
     // Execute Jacobi update kernel
     jacobi_kernel(a_new, a, iy_start, iy_end, nx, top_pe, iy_end_top,
         bottom_pe, iy_start_bottom, a_count, npes_per_gpu);
-
     BARRIER_LOCAL;
 
     // Neighborhood synchronization
@@ -222,9 +221,14 @@ __device__ void Block::iterate() {
     BARRIER_LOCAL;
 
     // Swap pointers
-    real* temp = a;
-    a = a_new;
-    a_new = temp;
+    /*
+    if (GID == 0) {
+      real* temp = a;
+      a = a_new;
+      a_new = temp;
+    }
+    BARRIER_LOCAL;
+    */
   }
 
   if (GID == 0) {
