@@ -7,6 +7,9 @@
 
 namespace charm {
 
+// Main function executed on all host PEs
+void main_host(int argc, char** argv);
+
 // Main function executed on all PEs
 __device__ void main(int argc, char** argv, size_t* argvs, int pe);
 

@@ -69,6 +69,9 @@ int main(int argc, char* argv[]) {
   nvshmem_init();
 #endif
 
+  // Execute application's host main function
+  charm::main_host(argc, argv);
+
   // Execution environment
   cudaDeviceProp prop;
   cudaGetDeviceProperties(&prop, 0);
