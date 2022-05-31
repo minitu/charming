@@ -1,4 +1,6 @@
 #include <stdio.h>
+#include <nvshmem.h>
+#include <nvshmemx.h>
 #include "jacobi2d.h"
 
 #define PI 3.141592
@@ -20,7 +22,38 @@ __shared__ charm::chare_proxy<Block>* block_proxy;
 #define BARRIER_LOCAL charm::barrier_local()
 __device__ charm::chare_proxy<Block>* block_proxy;
 __device__ int* params;
+__managed__ real* a_global;
+__managed__ real* a_new_global;
+__managed__ uint64_t* sync_arr_global;
 #endif
+
+void charm::main_host(int argc, char** argv) {
+  assert(argc == 5);
+  int n_chares = atoi(argv[1]);
+  int nx = atoi(argv[2]);
+  int ny = atoi(argv[3]);
+  int iter_max = atoi(argv[4]);
+  int pe = nvshmem_my_pe();
+  if (pe == 0) {
+    printf("Jacobi2D: Chares %d, nx %d, ny %d, iter_max %d\n",
+        n_chares, nx, ny, iter_max);
+  }
+
+  // Compute chunk size and allocate memory
+  int n_pes = nvshmem_n_pes();
+  assert(n_chares % n_pes == 0);
+  int n_chares_per_pe = n_chares / n_pes;
+  int chunk_size_low = (ny - 2) / n_chares;
+  int chunk_size_high = chunk_size_low + 1;
+  size_t a_global_size = nx * (chunk_size_high + 2) * sizeof(real) * n_chares_per_pe;
+  size_t a_new_global_size = a_global_size;
+  size_t sync_global_size = 2 * sizeof(uint64_t) * n_chares_per_pe;
+
+  a_global = (real*)nvshmem_malloc(a_global_size);
+  a_new_global = (real*)nvshmem_malloc(a_new_global_size);
+  sync_arr_global = (uint64_t*)nvshmem_malloc(sync_global_size);
+  assert(a_global && a_new_global && sync_arr_global);
+}
 
 __device__ void charm::main(int argc, char** argv, size_t* argvs, int pe) {
   // Execute on all elements
@@ -82,7 +115,12 @@ __device__ void initialize_boundaries(real* __restrict__ const a_new, real* __re
                                       const int my_ny, int ny);
 
 __device__ void jacobi_kernel(real* __restrict__ const a_new, const real* __restrict__ const a,
-                              const int iy_start, const int iy_end, const int nx);
+                              const int iy_start, const int iy_end, const int nx, const int top_pe,
+                              const int top_iy, const int bottom_pe, const int bottom_iy,
+                              const size_t a_count, const int npes_per_gpu);
+
+__device__ void syncneighborhood_kernel(int my_pe, int num_pes, uint64_t* sync_arr,
+                                        long counter, size_t sync_count, int npes_per_gpu);
 
 // Entry methods
 __device__ void Block::init(void* arg) {
@@ -91,7 +129,6 @@ __device__ void Block::init(void* arg) {
     nx = params[0];
     ny = params[1];
     iter_max = params[2];
-    iter = 0;
     npes = charm::chare::n;
     mype = charm::chare::i;
     recv_count = 0;
@@ -107,10 +144,21 @@ __device__ void Block::init(void* arg) {
     else
         chunk_size = chunk_size_high;
 
-    a_size = a_new_size = nx * (chunk_size_high + 2) * sizeof(real);
-    a = (real*)charm::malloc_user(a_size, a_offset);
-    a_new = (real*)charm::malloc_user(a_new_size, a_new_offset);
+    ngpus = charm::n_pes();
+    npes_per_gpu = npes / ngpus;
+    mype_local = mype % npes_per_gpu;
+    a_count = nx * (chunk_size_high + 2);
+    a_size = a_new_size = a_count * sizeof(real);
+    a = a_global + a_count * mype_local;
+    a_new = a_new_global + a_count * mype_local;
     assert(a && a_new);
+
+    // Signal array for neighborhood synchronization
+    sync_count = 2;
+    sync_size = sync_count * sizeof(uint64_t);
+    sync_arr = sync_arr_global + sync_count * mype_local;
+    synccounter = 1;
+    assert(sync_arr);
 
     // Calculate local domain boundaries
     if (mype < num_ranks_low) {
@@ -138,11 +186,13 @@ __device__ void Block::init(void* arg) {
   BARRIER_LOCAL;
 
 #ifdef SM_LEVEL
-  charm::memset_kernel_block(a, 0, nx * (chunk_size + 2) * sizeof(real));
-  charm::memset_kernel_block(a_new, 0, nx * (chunk_size + 2) * sizeof(real));
+  charm::memset_kernel_block(a, 0, a_size);
+  charm::memset_kernel_block(a_new, 0, a_new_size);
+  charm::memset_kernel_block(sync_arr, 0, sync_size);
 #else
-  charm::memset_kernel_grid(a, 0, nx * (chunk_size + 2) * sizeof(real));
-  charm::memset_kernel_grid(a_new, 0, nx * (chunk_size + 2) * sizeof(real));
+  charm::memset_kernel_grid(a, 0, a_size);
+  charm::memset_kernel_grid(a_new, 0, a_new_size);
+  charm::memset_kernel_grid(sync_arr, 0, sync_size);
 #endif
 
   initialize_boundaries(a_new, a, PI, iy_start_global - 1, nx, chunk_size, ny - 2);
@@ -152,9 +202,20 @@ __device__ void Block::init(void* arg) {
 }
 
 __device__ void Block::iterate() {
-  for (; iter < iter_max; iter++) {
+  for (int iter = 0; iter < iter_max; iter++) {
     // Execute Jacobi update kernel
-    jacobi_kernel(a_new, a, iy_start, iy_end, nx);
+    jacobi_kernel(a_new, a, iy_start, iy_end, nx, top_pe, iy_end_top,
+        bottom_pe, iy_start_bottom, a_count, npes_per_gpu);
+
+    BARRIER_LOCAL;
+
+    // Neighborhood synchronization
+    if (GID == 0) {
+      syncneighborhood_kernel(mype, npes, sync_arr, synccounter, sync_count, npes_per_gpu);
+      synccounter++;
+    }
+
+    BARRIER_LOCAL;
 
     // Swap pointers
     real* temp = a;
@@ -163,7 +224,7 @@ __device__ void Block::iterate() {
   }
 
   if (GID == 0) {
-    printf("Block %d completed %d iterations\n", mype, iter_max);
+    printf("Block %3d completed %4d iterations\n", mype, iter_max);
   }
 }
 
@@ -245,7 +306,9 @@ __device__ void initialize_boundaries(real* __restrict__ const a_new, real* __re
 }
 
 __device__ void jacobi_kernel(real* __restrict__ const a_new, const real* __restrict__ const a,
-                              const int iy_start, const int iy_end, const int nx) {
+                              const int iy_start, const int iy_end, const int nx, const int top_pe,
+                              const int top_iy, const int bottom_pe, const int bottom_iy,
+                              const size_t a_count, const int npes_per_gpu) {
   for (int iy = iy_start; iy < iy_end; iy++) {
     for (int ix = GID + 1; ix < (nx - 1); ix += GROUP_SIZE) {
       const real new_val = 0.25 * (a[iy * nx + ix + 1] + a[iy * nx + ix - 1] +
@@ -253,4 +316,47 @@ __device__ void jacobi_kernel(real* __restrict__ const a_new, const real* __rest
       a_new[iy * nx + ix] = new_val;
     }
   }
+
+  BARRIER_LOCAL;
+
+  /* Communicate the boundaries */
+  int top_gpu = top_pe / npes_per_gpu;
+  int bottom_gpu = bottom_pe / npes_per_gpu;
+  int top_pe_local = top_pe % npes_per_gpu;
+  int bottom_pe_local = bottom_pe % npes_per_gpu;
+  real* a_new_top = a_new_global + a_count * top_pe_local;
+  real* a_new_bottom = a_new_global + a_count * bottom_pe_local;
+  for (int block_ix = blockIdx.x * blockDim.x + 1; block_ix < ((nx + blockDim.x - 1) / blockDim.x);
+      block_ix += gridDim.x) {
+    nvshmemx_float_put_nbi_block(a_new_top + top_iy * nx + block_ix, a_new + iy_start * nx + block_ix,
+                                 min(blockDim.x, nx - 1 - block_ix), top_gpu);
+    nvshmemx_float_put_nbi_block(a_new_bottom + bottom_iy * nx + block_ix,
+                                 a_new + (iy_end - 1) * nx + block_ix,
+                                 min(blockDim.x, nx - 1 - block_ix), bottom_gpu);
+  }
+}
+
+__device__ void syncneighborhood_kernel(int my_pe, int num_pes, uint64_t* sync_arr,
+                                        long counter, size_t sync_count, int npes_per_gpu) {
+    int next_rank = (my_pe + 1) % num_pes;
+    int prev_rank = (my_pe == 0) ? num_pes - 1 : my_pe - 1;
+    nvshmem_quiet(); /* To ensure all prior nvshmem operations have been completed */
+
+    /* Notify neighbors about arrival */
+    int next_gpu = next_rank / npes_per_gpu;
+    int prev_gpu = prev_rank / npes_per_gpu;
+    int next_rank_local = next_rank % npes_per_gpu;
+    int prev_rank_local = prev_rank % npes_per_gpu;
+    uint64_t* sync_arr_next = sync_arr_global + sync_count * next_rank_local;
+    uint64_t* sync_arr_prev = sync_arr_global + sync_count * prev_rank_local;
+    /*
+    printf("Block %d signaling %d (GPU %d, %p) and %d (GPU %d, %p)\n", my_pe,
+        next_rank, next_gpu, sync_arr_next, prev_rank, prev_gpu, sync_arr_prev + 1);
+        */
+    nvshmemx_signal_op(sync_arr_next, counter, NVSHMEM_SIGNAL_SET, next_gpu);
+    nvshmemx_signal_op(sync_arr_prev + 1, counter, NVSHMEM_SIGNAL_SET, prev_gpu);
+
+    /* Wait for neighbors notification */
+    //printf("Block %d waiting on signals at %p and %p\n", my_pe, sync_arr, sync_arr + 1);
+    nvshmem_uint64_wait_until_all(sync_arr, 2, NULL, NVSHMEM_CMP_GE, counter);
 }

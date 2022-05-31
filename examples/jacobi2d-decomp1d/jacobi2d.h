@@ -15,9 +15,11 @@ struct Block : charm::chare {
   int nx;
   int ny;
   int iter_max;
-  int iter;
   int npes;
   int mype;
+  int ngpus;
+  int npes_per_gpu;
+  int mype_local;
   int recv_count;
   int term_count;
 #ifndef SM_LEVEL
@@ -27,10 +29,13 @@ struct Block : charm::chare {
 
   real* a;
   real* a_new;
+  size_t a_count;
   size_t a_size;
   size_t a_new_size;
-  size_t a_offset;
-  size_t a_new_offset;
+  uint64_t* sync_arr;
+  size_t sync_count;
+  size_t sync_size;
+  long synccounter;
 
   int chunk_size;
 
