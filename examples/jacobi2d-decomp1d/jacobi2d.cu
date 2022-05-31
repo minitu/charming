@@ -202,6 +202,11 @@ __device__ void Block::init(void* arg) {
 }
 
 __device__ void Block::iterate() {
+  if (GID == 0) {
+    start_tp = cuda::std::chrono::system_clock::now();
+  }
+  BARRIER_LOCAL;
+
   for (int iter = 0; iter < iter_max; iter++) {
     // Execute Jacobi update kernel
     jacobi_kernel(a_new, a, iy_start, iy_end, nx, top_pe, iy_end_top,
@@ -214,7 +219,6 @@ __device__ void Block::iterate() {
       syncneighborhood_kernel(mype, npes, sync_arr, synccounter, sync_count, npes_per_gpu);
       synccounter++;
     }
-
     BARRIER_LOCAL;
 
     // Swap pointers
@@ -224,8 +228,11 @@ __device__ void Block::iterate() {
   }
 
   if (GID == 0) {
-    printf("Block %3d completed %4d iterations\n", mype, iter_max);
+    end_tp = cuda::std::chrono::system_clock::now();
+    cuda_dur diff = end_tp - start_tp;
+    printf("Block %3d completed %4d iterations in %lf s\n", mype, iter_max, diff.count());
   }
+  BARRIER_LOCAL;
 }
 
 /*
