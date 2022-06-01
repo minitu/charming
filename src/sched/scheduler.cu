@@ -302,6 +302,7 @@ __device__ __forceinline__ void loop() {
   comm_module->process_remote();
   comm_module->cleanup_remote();
   comm_module->cleanup_heap();
+  comm_module->check_async_wait();
 }
 
 __global__ void charm::scheduler(int argc, char** argv, size_t* argvs) {

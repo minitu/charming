@@ -37,6 +37,9 @@ struct alignas(ALIGN_SIZE) comm {
   size_t dst_offset;
   void* src_addr;
   size_t src_offset;
+
+  // TODO: Support more than one chare array
+  int async_wait_chare_id;
 #endif
 
   int local_start;
@@ -49,6 +52,9 @@ struct alignas(ALIGN_SIZE) comm {
   __device__ void process_remote();
   __device__ void cleanup_remote();
   __device__ void cleanup_heap();
+#ifndef SM_LEVEL
+  __device__ void check_async_wait();
+#endif
 };
 
 #ifndef SM_LEVEL

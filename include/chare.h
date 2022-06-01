@@ -8,6 +8,7 @@
 
 #define CHARE_TYPE_CNT_MAX 1024 // Maximum number of chare types
 #define EM_CNT_MAX 128 // Maximum number of entry methods per chare type
+#define ASYNC_WAIT_MAX 16 // Maximum number of asynchronously waiting chares
 #define MISMATCH_MAX 128 // Maximum number of mismatched messages per chare type
 
 // GPU constant memory
@@ -37,6 +38,16 @@ struct entry_method : entry_method_base<C> {
   __device__ virtual void operator()(C& chare, void* arg) { Func(chare, arg); }
 };
 
+struct async_wait_t {
+  bool valid;
+  uint64_t* ivars;
+  size_t nelems;
+  int cmp;
+  uint64_t cmp_value;
+  int idx;
+  int ep;
+};
+
 struct mismatch_t {
   int found_idx;
   uint64_t comp;
@@ -58,11 +69,14 @@ struct chare_proxy_base {
 
   int em_count; // Number of registered entry methods
 
+  async_wait_t* async_waits;
+
   int *refnum; // Reference numbers
   mismatch_t* mismatches;
 
   __device__ chare_proxy_base() : id(-1), n_local(0), n_total(0), start_idx(-1),
-  end_idx(-1), loc_map(nullptr), em_count(0), refnum(nullptr), mismatches(nullptr)  {}
+  end_idx(-1), loc_map(nullptr), em_count(0), async_waits(nullptr),
+  refnum(nullptr), mismatches(nullptr)  {}
   __device__ virtual bool call(int idx, int ep, void* arg, int ref) = 0;
 };
 
@@ -141,6 +155,7 @@ struct chare_proxy : chare_proxy_base {
         end_idx = end;
 
         objects = (n_local > 0) ? new C*[n_local] : nullptr;
+        async_waits = (n_local > 0) ? new async_wait_t[ASYNC_WAIT_MAX] : nullptr;
         refnum = (n_local > 0) ? new int[n_local] : nullptr;
         mismatches = (n_local > 0) ? new mismatch_t[MISMATCH_MAX] : nullptr;
         for (int idx = 0; idx < n_local; idx++) {
@@ -193,6 +208,36 @@ struct chare_proxy : chare_proxy_base {
       invoke(i, ep, buf, size);
     }
   }
+
+#ifndef SM_LEVEL
+  // Single-threaded
+  inline __device__ void async_wait(uint64_t* ivars, size_t nelems, int cmp,
+      uint64_t cmp_value, int idx, int ep) {
+    // Notify scheduler that this chare array has to asynchronously wait
+    add_async_wait(id);
+
+    // Find a free async_wait
+    int free_idx = -1;
+    for (int i = 0; i < ASYNC_WAIT_MAX; i++) {
+      if (!async_waits[i].valid) {
+        free_idx = i;
+        break;
+      }
+    }
+
+    // Store information
+    async_wait_t& aw = async_waits[free_idx];
+    aw.valid = true;
+    aw.ivars = ivars;
+    aw.nelems = nelems;
+    aw.cmp = cmp;
+    aw.cmp_value = cmp_value;
+    aw.idx = idx;
+    aw.ep = ep;
+    PDEBUG("PE %d adding async wait for chare array %d, chare index %d, ep %d\n",
+        c_my_dev, id, idx, ep);
+  }
+#endif
 
   // Single-threaded
   inline __device__ void set_refnum(int idx, int val) {

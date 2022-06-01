@@ -177,6 +177,7 @@ __device__ void charm::comm::init() {
 #else
   int comp_count = REMOTE_MSG_MAX * c_n_pes * 2;
   addr_heap.init(heap_buf, comp_count);
+  async_wait_chare_id = -1;
 #endif
 
   sent_term_flag = false;
@@ -1168,6 +1169,41 @@ __device__ void charm::comm::cleanup_heap() {
   barrier_local();
 }
 
+__device__ void charm::comm::check_async_wait() {
+  if (GID == 0) {
+    if (async_wait_chare_id != -1) {
+      chare_proxy_base*& chare_proxy = proxy_tables[0].proxies[async_wait_chare_id];
+      async_wait_t* aws = chare_proxy->async_waits;
+      bool all_done = true;
+      for (int i = 0; i < ASYNC_WAIT_MAX; i++) {
+        async_wait_t& aw = aws[i];
+        if (aw.valid) {
+          if (nvshmem_uint64_test_all(aw.ivars, aw.nelems, nullptr, aw.cmp,
+                aw.cmp_value)) {
+            // Test success, invoke entry method
+            PDEBUG("PE %d async wait complete for chare array %d, chare index %d, ep %d\n",
+                c_my_dev, async_wait_chare_id, aw.idx, aw.ep);
+            chare_proxy->call(aw.idx, aw.ep, nullptr, -1);
+
+            // Set this async wait to invalid
+            aw.valid = false;
+          } else {
+            all_done = false;
+          }
+        }
+      }
+
+      if (all_done) {
+        // All async waits for this chare array is complete
+        PDEBUG("PE %d all async waits for chare array %d complete\n",
+            c_my_dev, async_wait_chare_id);
+        async_wait_chare_id = -1;
+      }
+    }
+  }
+  barrier_local();
+}
+
 // Single-threaded
 __device__ envelope* charm::create_envelope(msgtype type, size_t payload_size,
     size_t& offset) {
@@ -1270,6 +1306,13 @@ __device__ void charm::send_do_term_msg(int dst_pe) {
   send_remote_msg((envelope*)comm_module->env, comm_module->src_offset,
       dst_pe);
 }
+
+// Single-threaded
+__device__ void charm::add_async_wait(int chare_id) {
+  assert(comm_module->async_wait_chare_id == -1
+      || comm_module->async_wait_chare_id == chare_id);
+  comm_module->async_wait_chare_id = chare_id;
+}
 #endif // SM_LEVEL
 
 // Single-threaded
@@ -1312,7 +1355,7 @@ __device__ void* charm::malloc_user(size_t size, size_t& offset) {
     mbuf->print();
     return nullptr;
   }
-  PDEBUG("PE %d: malloc_user offset %llu size %d\n", c_my_dev, offset, size);
+  PDEBUG("PE %d malloc_user offset %llu size %llu\n", c_my_dev, offset, size);
   return mbuf->addr(offset);
 }
 

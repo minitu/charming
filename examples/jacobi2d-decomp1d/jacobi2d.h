@@ -14,6 +14,7 @@ typedef cuda::std::chrono::duration<double> cuda_dur;
 struct Block : charm::chare {
   int nx;
   int ny;
+  int iter;
   int iter_max;
   int npes;
   int mype;
@@ -54,6 +55,8 @@ struct Block : charm::chare {
   __device__ Block() {}
   __device__ void init(void* arg);
   __device__ void iterate();
+  __device__ void begin();
+  __device__ void resume(void* arg);
   //__device__ void update();
   //__device__ void send_halo();
   //__device__ void recv_halo(void* arg);
@@ -62,6 +65,7 @@ struct Block : charm::chare {
 
 // Entry methods
 __device__ void entry_init(Block& c, void* arg) { c.init(arg); }
+__device__ void entry_resume(Block& c, void* arg) { c.resume(arg); }
 /*
 __device__ void entry_recv_halo(Block& c, void* arg) { c.recv_halo(arg); }
 __device__ void entry_terminate(Block& c, void* arg) { c.terminate(arg); }

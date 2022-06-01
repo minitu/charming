@@ -72,6 +72,7 @@ __device__ void charm::main(int argc, char** argv, size_t* argvs, int pe) {
     // Create chare proxy and register entry methods
     block_proxy = new charm::chare_proxy<Block>();
     block_proxy->add_entry_method<&entry_init>();
+    block_proxy->add_entry_method<&entry_resume>();
     /*
     block_proxy->add_entry_method<&entry_recv_halo>();
     block_proxy->add_entry_method<&entry_terminate>();
@@ -128,6 +129,7 @@ __device__ void Block::init(void* arg) {
     int* params = (int*)arg;
     nx = params[0];
     ny = params[1];
+    iter = 0;
     iter_max = params[2];
     npes = charm::chare::n;
     mype = charm::chare::i;
@@ -205,6 +207,50 @@ __device__ void Block::iterate() {
   if (GID == 0) {
     start_tp = cuda::std::chrono::system_clock::now();
   }
+  begin();
+}
+
+__device__ void Block::begin() {
+  // Execute Jacobi update kernel
+  jacobi_kernel(a_new, a, iy_start, iy_end, nx, top_pe, iy_end_top,
+      bottom_pe, iy_start_bottom, a_count, npes_per_gpu);
+  BARRIER_LOCAL;
+
+  // Neighborhood synchronization
+  if (GID == 0) {
+    syncneighborhood_kernel(mype, npes, sync_arr, synccounter, sync_count, npes_per_gpu);
+    synccounter++;
+  }
+}
+
+__device__ void Block::resume(void* arg) {
+  // Iteration done
+  if (GID == 0) {
+    // Swap pointers
+    real* temp = a;
+    a = a_new;
+    a_new = temp;
+    iter++;
+  }
+  BARRIER_LOCAL;
+
+  if (iter == iter_max) {
+    if (GID == 0) {
+      end_tp = cuda::std::chrono::system_clock::now();
+      cuda_dur diff = end_tp - start_tp;
+      printf("Block %3d completed %4d iterations in %lf s\n", mype, iter_max, diff.count());
+    }
+    BARRIER_LOCAL;
+  } else {
+    begin();
+  }
+}
+
+/*
+__device__ void Block::iterate() {
+  if (GID == 0) {
+    start_tp = cuda::std::chrono::system_clock::now();
+  }
 
   real* a_my = a;
   real* a_new_my = a_new;
@@ -234,6 +280,7 @@ __device__ void Block::iterate() {
   }
   BARRIER_LOCAL;
 }
+*/
 
 /*
 __device__ void Block::update() {
@@ -345,25 +392,26 @@ __device__ void jacobi_kernel(real* __restrict__ const a_new, const real* __rest
 
 __device__ void syncneighborhood_kernel(int my_pe, int num_pes, uint64_t* sync_arr,
                                         long counter, size_t sync_count, int npes_per_gpu) {
-    int next_rank = (my_pe + 1) % num_pes;
-    int prev_rank = (my_pe == 0) ? num_pes - 1 : my_pe - 1;
-    nvshmem_quiet(); /* To ensure all prior nvshmem operations have been completed */
+  int next_rank = (my_pe + 1) % num_pes;
+  int prev_rank = (my_pe == 0) ? num_pes - 1 : my_pe - 1;
+  nvshmem_quiet(); /* To ensure all prior nvshmem operations have been completed */
 
-    /* Notify neighbors about arrival */
-    int next_gpu = next_rank / npes_per_gpu;
-    int prev_gpu = prev_rank / npes_per_gpu;
-    int next_rank_local = next_rank % npes_per_gpu;
-    int prev_rank_local = prev_rank % npes_per_gpu;
-    uint64_t* sync_arr_next = sync_arr_global + sync_count * next_rank_local;
-    uint64_t* sync_arr_prev = sync_arr_global + sync_count * prev_rank_local;
-    /*
-    printf("Block %d signaling %d (GPU %d, %p) and %d (GPU %d, %p)\n", my_pe,
-        next_rank, next_gpu, sync_arr_next, prev_rank, prev_gpu, sync_arr_prev + 1);
-        */
-    nvshmemx_signal_op(sync_arr_next, counter, NVSHMEM_SIGNAL_SET, next_gpu);
-    nvshmemx_signal_op(sync_arr_prev + 1, counter, NVSHMEM_SIGNAL_SET, prev_gpu);
+  /* Notify neighbors about arrival */
+  int next_gpu = next_rank / npes_per_gpu;
+  int prev_gpu = prev_rank / npes_per_gpu;
+  int next_rank_local = next_rank % npes_per_gpu;
+  int prev_rank_local = prev_rank % npes_per_gpu;
+  uint64_t* sync_arr_next = sync_arr_global + sync_count * next_rank_local;
+  uint64_t* sync_arr_prev = sync_arr_global + sync_count * prev_rank_local;
+  /*
+  printf("Block %d signaling %d (GPU %d, %p) and %d (GPU %d, %p)\n", my_pe,
+      next_rank, next_gpu, sync_arr_next, prev_rank, prev_gpu, sync_arr_prev + 1);
+      */
+  nvshmemx_signal_op(sync_arr_next, counter, NVSHMEM_SIGNAL_SET, next_gpu);
+  nvshmemx_signal_op(sync_arr_prev + 1, counter, NVSHMEM_SIGNAL_SET, prev_gpu);
 
-    /* Wait for neighbors notification */
-    //printf("Block %d waiting on signals at %p and %p\n", my_pe, sync_arr, sync_arr + 1);
-    nvshmem_uint64_wait_until_all(sync_arr, 2, NULL, NVSHMEM_CMP_GE, counter);
+  /* Wait for neighbors notification */
+  //printf("Block %d waiting on signals at %p and %p\n", my_pe, sync_arr, sync_arr + 1);
+  //nvshmem_uint64_wait_until_all(sync_arr, 2, NULL, NVSHMEM_CMP_GE, counter);
+  block_proxy->async_wait(sync_arr, 2, NVSHMEM_CMP_GE, counter, my_pe, 1);
 }

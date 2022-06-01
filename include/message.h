@@ -109,6 +109,7 @@ __device__ void send_do_term_msg_ce(int dst_ce);
 __device__ void send_do_term_msg_pe(int dst_local_rank);
 #else
 __device__ void send_do_term_msg(int dst_pe);
+__device__ void add_async_wait(int chare_id);
 #endif
 __device__ void revive_mismatches(int chare_id, int chare_idx, int refnum);
 
