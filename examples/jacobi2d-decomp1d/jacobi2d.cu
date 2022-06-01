@@ -9,6 +9,8 @@
 #define GRID_HEIGHT 16384
 #define N_ITERS 1000
 
+//#define ASYNC_WAIT
+
 #ifdef SM_LEVEL
 // SM-level scheduling
 #define GID (threadIdx.x)
@@ -203,6 +205,7 @@ __device__ void Block::init(void* arg) {
   iterate();
 }
 
+#ifdef ASYNC_WAIT
 __device__ void Block::iterate() {
   if (GID == 0) {
     start_tp = cuda::std::chrono::system_clock::now();
@@ -245,8 +248,7 @@ __device__ void Block::resume(void* arg) {
     begin();
   }
 }
-
-/*
+#else
 __device__ void Block::iterate() {
   if (GID == 0) {
     start_tp = cuda::std::chrono::system_clock::now();
@@ -280,7 +282,10 @@ __device__ void Block::iterate() {
   }
   BARRIER_LOCAL;
 }
-*/
+
+__device__ void Block::begin() {}
+__device__ void Block::resume(void* arg) {}
+#endif
 
 /*
 __device__ void Block::update() {
@@ -412,6 +417,9 @@ __device__ void syncneighborhood_kernel(int my_pe, int num_pes, uint64_t* sync_a
 
   /* Wait for neighbors notification */
   //printf("Block %d waiting on signals at %p and %p\n", my_pe, sync_arr, sync_arr + 1);
-  //nvshmem_uint64_wait_until_all(sync_arr, 2, NULL, NVSHMEM_CMP_GE, counter);
+#ifdef ASYNC_WAIT
   block_proxy->async_wait(sync_arr, 2, NVSHMEM_CMP_GE, counter, my_pe, 1);
+#else
+  nvshmem_uint64_wait_until_all(sync_arr, 2, NULL, NVSHMEM_CMP_GE, counter);
+#endif
 }
