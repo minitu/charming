@@ -1170,38 +1170,35 @@ __device__ void charm::comm::cleanup_heap() {
 }
 
 __device__ void charm::comm::check_async_wait() {
-  if (GID == 0) {
-    if (async_wait_chare_id != -1) {
-      chare_proxy_base*& chare_proxy = proxy_tables[0].proxies[async_wait_chare_id];
+  if (async_wait_chare_id != -1) {
+    chare_proxy_base*& chare_proxy = proxy_tables[0].proxies[async_wait_chare_id];
+
+    if (GID == 0) {
+      async_wait_chare_idx = -1;
+      async_wait_ep = -1;
       async_wait_t* aws = chare_proxy->async_waits;
-      bool all_done = true;
       for (int i = 0; i < ASYNC_WAIT_MAX; i++) {
         async_wait_t& aw = aws[i];
-        if (aw.valid) {
-          if (nvshmem_uint64_test_all(aw.ivars, aw.nelems, nullptr, aw.cmp,
-                aw.cmp_value)) {
-            // Test success, invoke entry method
-            PDEBUG("PE %d async wait complete for chare array %d, chare index %d, ep %d\n",
-                c_my_dev, async_wait_chare_id, aw.idx, aw.ep);
-            chare_proxy->call(aw.idx, aw.ep, nullptr, -1);
+        if (aw.valid && nvshmem_uint64_test_all(aw.ivars, aw.nelems, nullptr,
+            aw.cmp, aw.cmp_value)) {
+          // Test success, need to execute entry method
+          PDEBUG("PE %d async wait complete for chare array %d, chare index %d, ep %d\n",
+              c_my_dev, async_wait_chare_id, aw.idx, aw.ep);
+          async_wait_chare_idx = aw.idx;
+          async_wait_ep = aw.ep;
 
-            // Set this async wait to invalid
-            aw.valid = false;
-          } else {
-            all_done = false;
-          }
+          // Set this async wait to invalid
+          aw.valid = false;
+          break;
         }
       }
+    }
+    barrier_local();
 
-      if (all_done) {
-        // All async waits for this chare array is complete
-        PDEBUG("PE %d all async waits for chare array %d complete\n",
-            c_my_dev, async_wait_chare_id);
-        async_wait_chare_id = -1;
-      }
+    if (async_wait_chare_idx != -1) {
+      chare_proxy->call(async_wait_chare_idx, async_wait_ep, nullptr, -1);
     }
   }
-  barrier_local();
 }
 
 // Single-threaded

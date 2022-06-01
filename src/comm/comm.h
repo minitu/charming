@@ -38,8 +38,10 @@ struct alignas(ALIGN_SIZE) comm {
   void* src_addr;
   size_t src_offset;
 
-  // TODO: Support more than one chare array
-  int async_wait_chare_id;
+  // For asynchronous wait
+  int async_wait_chare_id; // TODO: Support more than chare array
+  int async_wait_chare_idx;
+  int async_wait_ep;
 #endif
 
   int local_start;
